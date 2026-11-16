@@ -21,6 +21,16 @@ services:
       - identity-access-service
     restart: unless-stopped
 
+  grower-service:
+    image: ghcr.io/manjunathyadavs1998/grower-service:${GROWER_IMAGE_TAG:-latest}
+    container_name: gc-grower
+    env_file: services/grower-service.env
+    ports:
+      - "8084:8084"                                # 8083 is Kafka Connect
+    depends_on:
+      - identity-access-service
+    restart: unless-stopped
+
 networks:
   default:
     name: growercare

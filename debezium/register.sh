@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 CONNECT=${CONNECT_URL:-http://localhost:8083}
 
-for file in iam-outbox.json case-outbox.json; do
+for file in iam-outbox.json case-outbox.json grower-outbox.json; do
   name=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['name'])" "$file")
   python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1]))['config']))" "$file" \
     | curl -fsS -X PUT -H 'Content-Type: application/json' --data @- "$CONNECT/connectors/$name/config" > /dev/null

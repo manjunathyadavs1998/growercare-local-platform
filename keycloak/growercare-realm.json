@@ -86,6 +86,28 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "grower-service",
+      "name": "grower-service (service-to-service)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "dev-grower-service-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "aud-gc-internal",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "gc-internal",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
     }
   ],
   "users": [
