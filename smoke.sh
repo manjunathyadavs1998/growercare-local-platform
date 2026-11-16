@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # SPEC-PLAT-01 R10: end-to-end smoke test against the real local stack
-# (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082, profile local).
+# (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082 + grower-service :8084).
 # Real Keycloak tokens (client gc-dev-cli). Prints a PASS/FAIL table; exit code = number of failed checks.
 set -uo pipefail
 
 KC=${KC:-http://localhost:8180/realms/growercare}
 IAM=${IAM:-http://localhost:8081}
 CASE=${CASE:-http://localhost:8082}
+GROWER=${GROWER:-http://localhost:8084}
 PY=${PY:-python}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -39,7 +40,7 @@ header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'
 echo "== GrowerCare smoke test =="
 
 # ---------------------------------------------------------------- S01 health
-for target in "$IAM/actuator/health" "$CASE/actuator/health" "http://localhost:8180/realms/growercare"; do
+for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "http://localhost:8180/realms/growercare"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
 done
