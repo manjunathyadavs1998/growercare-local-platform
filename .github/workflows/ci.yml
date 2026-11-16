@@ -1,0 +1,32 @@
+# Platform checks (SPEC-PLAT-06 R81, SPEC-PLAT-04 D8). Required status check for main: "verify".
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Debezium connector configs (SPEC-PLAT-04 R50/R52/R62)
+        run: python3 scripts/check_connectors.py
+
+      - name: Compose files are valid (with the example env files)
+        run: |
+          cp .env.example .env
+          for svc in identity-access-service case-service; do cp "services/$svc.env.example" "services/$svc.env"; done
+          docker compose config -q
+          docker network create growercare >/dev/null
+          docker compose -f compose.services.yml config -q
+
+      - name: Shell scripts parse
+        run: for f in *.sh postgres/*.sh debezium/*.sh scripts/*.sh; do bash -n "$f"; done

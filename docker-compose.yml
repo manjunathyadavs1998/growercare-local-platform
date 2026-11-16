@@ -1,5 +1,6 @@
-# GrowerCare local development stack.
-# Usage (from gc-backend/local-dev):  cp .env.example .env  &&  docker compose up -d
+# GrowerCare local platform (ADR-017): the shared infrastructure every service repository runs against.
+# Usage:  cp .env.example .env  &&  docker compose up -d --wait  &&  ./debezium/register.sh
+# Services join the Docker network "growercare" (service repos: their own compose.yaml; or compose.services.yml here).
 # Dev only: credentials come from .env (git-ignored). Production uses Secrets Manager (see docs/architecture/07_DEPLOYMENT_AWS.md).
 name: growercare
 
@@ -170,3 +171,7 @@ services:
 volumes:
   gc-pgdata:
   gc-s3data:
+
+networks:
+  default:
+    name: growercare        # fixed name: service repositories attach to it as an external network

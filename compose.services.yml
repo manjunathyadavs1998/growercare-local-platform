@@ -1,0 +1,27 @@
+# End-to-end (SPEC-PLAT-06 R80): both services as their released images, on the platform network.
+#   docker compose -f compose.services.yml up -d --wait     (after: docker compose up -d --wait)
+# Each service reads ONLY its env file (services/<name>.env, git-ignored; copy from services/<name>.env.example).
+# IMAGE_TAG picks the image version (default: latest = the newest main build).
+services:
+  identity-access-service:
+    image: ghcr.io/manjunathyadavs1998/identity-access-service:${IAM_IMAGE_TAG:-latest}
+    container_name: gc-iam
+    env_file: services/identity-access-service.env
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  case-service:
+    image: ghcr.io/manjunathyadavs1998/case-service:${CASE_IMAGE_TAG:-latest}
+    container_name: gc-case
+    env_file: services/case-service.env
+    ports:
+      - "8082:8082"
+    depends_on:
+      - identity-access-service
+    restart: unless-stopped
+
+networks:
+  default:
+    name: growercare
+    external: true                                # created by docker-compose.yml
