@@ -118,6 +118,10 @@ DL_STATUS=$(curl -s -o "$TMP/downloaded.pdf" -w '%{http_code}' "$DL_URL")
 check CASE-S12c "retailer2 (case shared) downloads the identical file via presigned GET" \
   "$([[ $DL_STATUS == 200 ]] && cmp -s "$TMP/evidence.pdf" "$TMP/downloaded.pdf"; echo $?)"
 
+# ---------------------------------------------------------------- SPEC-PLAT-05: errors are always problem+json
+call GET "$CASE/cases/$CASE_ID/attachments//download" "$T_GROWER"          # an empty id, as a buggy client sends
+check PLAT-E86 "empty path segment (real Tomcat + firewall) → 400 problem+json, not the Boot error page"   "$([[ $STATUS == 400 && $(header Content-Type) == application/problem+json* && $(json "$TMP/body" "['errors'][0]['field']") == path ]]; echo $?)"
+
 # ---------------------------------------------------------------- SPEC-PLAT-04: events through Debezium + Kafka
 # Needs the kafka + connect containers and ./debezium/register.sh. Reads topics with the broker's console consumer.
 DOCKER=${DOCKER:-docker}

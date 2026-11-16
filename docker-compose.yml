@@ -56,7 +56,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.8
     container_name: gc-keycloak
     command: ["start-dev", "--import-realm", "--http-port=8180"]
     environment:
