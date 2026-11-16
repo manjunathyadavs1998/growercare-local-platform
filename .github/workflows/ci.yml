@@ -23,7 +23,7 @@ jobs:
       - name: Compose files are valid (with the example env files)
         run: |
           cp .env.example .env
-          for svc in identity-access-service case-service; do cp "services/$svc.env.example" "services/$svc.env"; done
+          for svc in identity-access-service case-service grower-service; do cp "services/$svc.env.example" "services/$svc.env"; done
           docker compose config -q
           docker network create growercare >/dev/null
           docker compose -f compose.services.yml config -q
