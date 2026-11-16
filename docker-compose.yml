@@ -88,7 +88,7 @@ services:
   # S3-compatible object store (Apache-2.0). Signatures are enforced through seaweedfs/s3.json (dev keys only).
   # case-service creates the buckets locally (gc.attachments.create-buckets=true in the local profile).
   seaweedfs:
-    image: chrislusf/seaweedfs:3.97
+    image: chrislusf/seaweedfs:4.53
     container_name: gc-seaweedfs
     command: ["server", "-filer", "-s3", "-s3.config=/etc/seaweedfs/s3.json", "-s3.port=8333", "-dir=/data",
               "-volume.max=100", "-master.volumeSizeLimitMB=256"]   # one collection per bucket, several volumes each
