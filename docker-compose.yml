@@ -83,6 +83,27 @@ services:
       retries: 30
       start_period: 30s
 
+  # ------------------------------------------------------------------ attachments (SPEC-CASE-05 D2)
+  # S3-compatible object store (Apache-2.0). Signatures are enforced through seaweedfs/s3.json (dev keys only).
+  # case-service creates the buckets locally (gc.attachments.create-buckets=true in the local profile).
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.97
+    container_name: gc-seaweedfs
+    command: ["server", "-filer", "-s3", "-s3.config=/etc/seaweedfs/s3.json", "-s3.port=8333", "-dir=/data",
+              "-volume.max=100", "-master.volumeSizeLimitMB=256"]   # one collection per bucket, several volumes each
+    ports:
+      - "8333:8333"
+    volumes:
+      - gc-s3data:/data
+      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      # anonymous requests are refused (403) once the S3 API is up
+      test: ["CMD-SHELL", "wget -q -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -q '403'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
   # ------------------------------------------------------------------ events (SPEC-PLAT-04 D1)
   # Single-node Kafka in KRaft mode (no ZooKeeper), the same product as MSK. Containers use kafka:9092, the host
   # (services, smoke test) uses localhost:9094. Data is ephemeral: Debezium resumes from its replication slot.
@@ -148,3 +169,4 @@ services:
 
 volumes:
   gc-pgdata:
+  gc-s3data:

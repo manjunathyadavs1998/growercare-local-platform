@@ -91,6 +91,33 @@ check PLAT-S10b "grower shares with retailer 502 → 200" "$([[ $STATUS == 200 ]
 call GET "$CASE/cases/$CASE_ID" "$T_RET2"
 check PLAT-S10c "retailer2.in can now read it" "$([[ $STATUS == 200 ]]; echo $?)"
 
+# ---------------------------------------------------------------- SPEC-CASE-05: attachment upload → scan → download
+# Bytes go straight to SeaweedFS through the presigned URL; the scheduled scan job (every 10 s) publishes them.
+printf '%%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "$TMP/evidence.pdf"
+read -r SIZE SHA < <("$PY" -c "import hashlib,os,sys; b=open(sys.argv[1],'rb').read(); print(len(b), hashlib.sha256(b).hexdigest())" "$TMP/evidence.pdf" | tr -d '\r')
+call POST "$CASE/cases/$CASE_ID/attachments" "$T_GROWER" "{\"kind\":\"INVOICE\",\"contentType\":\"application/pdf\",\"sizeBytes\":$SIZE,\"sha256\":\"$SHA\"}"
+ATT_ID=$(json "$TMP/body" "['attachmentId']")
+UPLOAD_URL=$(json "$TMP/body" "['upload']['url']")
+mapfile -t UPLOAD_HEADERS < <("$PY" -c "import json,sys; [print(f'{k}: {v}') for k,v in json.load(open(sys.argv[1]))['upload']['headers'].items()]" "$TMP/body" | tr -d '\r')
+HDR_ARGS=(); for h in "${UPLOAD_HEADERS[@]}"; do HDR_ARGS+=(-H "$h"); done
+PUT_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${HDR_ARGS[@]}" --data-binary @"$TMP/evidence.pdf" "$UPLOAD_URL")
+call POST "$CASE/cases/$CASE_ID/attachments/$ATT_ID/complete" "$T_GROWER"
+check CASE-S12a "grower uploads an invoice via presigned PUT and completes → PENDING" \
+  "$([[ -n "$ATT_ID" && $PUT_STATUS == 200 && $STATUS == 200 && $(json "$TMP/body" "['status']") == PENDING ]]; echo $?)"
+ATT_STATUS=""
+for _ in $(seq 1 30); do
+  call GET "$CASE/cases/$CASE_ID/attachments" "$T_GROWER"
+  ATT_STATUS=$("$PY" -c "import json,sys; print(next((a['status'] for a in json.load(open(sys.argv[1]))['items'] if a['attachmentId']==sys.argv[2]), ''))" "$TMP/body" "$ATT_ID" | tr -d '\r')
+  [[ "$ATT_STATUS" == PENDING ]] || break
+  sleep 2
+done
+check CASE-S12b "scan job marks it CLEAN within 60 s" "$([[ "$ATT_STATUS" == CLEAN ]]; echo $?)"
+call GET "$CASE/cases/$CASE_ID/attachments/$ATT_ID/download" "$T_RET2"
+DL_URL=$(json "$TMP/body" "['url']")
+DL_STATUS=$(curl -s -o "$TMP/downloaded.pdf" -w '%{http_code}' "$DL_URL")
+check CASE-S12c "retailer2 (case shared) downloads the identical file via presigned GET" \
+  "$([[ $DL_STATUS == 200 ]] && cmp -s "$TMP/evidence.pdf" "$TMP/downloaded.pdf"; echo $?)"
+
 # ---------------------------------------------------------------- SPEC-PLAT-04: events through Debezium + Kafka
 # Needs the kafka + connect containers and ./debezium/register.sh. Reads topics with the broker's console consumer.
 DOCKER=${DOCKER:-docker}
