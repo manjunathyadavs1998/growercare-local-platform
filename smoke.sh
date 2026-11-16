@@ -51,6 +51,17 @@ T_TM=$(token tm.in 'Staff#Pass12')
 T_AGRO=$(token agro.in 'Staff#Pass12')
 T_RET2=$(token retailer2.in 'Partner#Pass1')
 
+# ---------------------------------------------------------------- S00 warm-up (cold JVMs after a fresh start)
+# The first authenticated call goes case-service → Keycloak (client token) → IAM (principal). On cold containers it can
+# exceed the 2 s IAM read timeout and fail closed with 503 (SPEC-CASE-01 R9a); production gets traffic only when warm.
+WARM=""
+for _ in $(seq 1 30); do
+  call GET "$CASE/cases?limit=1" "$T_GROWER"
+  [[ $STATUS == 200 ]] && { WARM=yes; break; }
+  sleep 2
+done
+check PLAT-S00 "services warm: an authenticated call through IAM succeeds within 60 s (503 while cold, never 500)" "$([[ -n "$WARM" ]]; echo $?)"
+
 # ---------------------------------------------------------------- S02 IAM /me
 call GET "$IAM/me" "$T_CARE"
 check PLAT-S02 "IAM /me as care.in → CARE_AGENT" "$([[ $STATUS == 200 && $(json "$TMP/body" "['grants'][0]['roleCode']") == CARE_AGENT ]]; echo $?)"
