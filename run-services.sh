@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
 mkdir -p logs
 PIDS=logs/services.pids
-JAVA_OPTS=${JAVA_OPTS:-"-Xmx384m -XX:+UseSerialGC"}
+JAVA_OPTS=${JAVA_OPTS:-"-Xmx768m -XX:+UseSerialGC"}   # 384m thrashes since the Kafka client + 128-shard migration (SPEC-PLAT-04)
 
 health() { curl -fsS --max-time 3 "http://localhost:$1/actuator/health" 2>/dev/null | grep -q '"UP"'; }
 

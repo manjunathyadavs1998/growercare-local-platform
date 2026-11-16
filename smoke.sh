@@ -91,6 +91,49 @@ check PLAT-S10b "grower shares with retailer 502 → 200" "$([[ $STATUS == 200 ]
 call GET "$CASE/cases/$CASE_ID" "$T_RET2"
 check PLAT-S10c "retailer2.in can now read it" "$([[ $STATUS == 200 ]]; echo $?)"
 
+# ---------------------------------------------------------------- SPEC-PLAT-04: events through Debezium + Kafka
+# Needs the kafka + connect containers and ./debezium/register.sh. Reads topics with the broker's console consumer.
+DOCKER=${DOCKER:-docker}
+command -v "$DOCKER" > /dev/null || DOCKER="${LOCALAPPDATA:-}/Programs/DockerDesktop/resources/bin/docker.exe"
+dexec() { MSYS_NO_PATHCONV=1 "$DOCKER" exec "$@"; }   # Git Bash: keep container paths (/opt/kafka) unconverted
+ENV_FILE="$(dirname "$0")/.env"
+REDIS_PW=${REDIS_PASSWORD:-$(grep '^REDIS_PASSWORD=' "$ENV_FILE" | cut -d= -f2 | tr -d '\r')}
+
+topic_lines() { # topic → one line per record: headers | key | value
+  dexec gc-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic "$1" \
+    --from-beginning --timeout-ms 6000 --property print.key=true --property print.headers=true \
+    --property key.separator=' | ' 2>/dev/null
+}
+await_topic() { # topic grep-pattern → sets $LINES (matching records, retried for ~20 s)
+  for _ in 1 2 3; do LINES=$(topic_lines "$1" | grep -- "$2"); [[ -n "$LINES" ]] && return 0; done; return 1
+}
+cached() { # subject → 1 when case-service has the principal in Redis
+  dexec gc-redis redis-cli -a "$REDIS_PW" --no-auth-warning EXISTS "gc:principal:$1" | tr -d '\r'
+}
+await_evicted() { # subject → 0 once evicted within 10 s
+  for _ in $(seq 1 20); do [[ $(cached "$1") == 0 ]] && return 0; sleep 0.5; done; return 1
+}
+
+await_topic case.case.events "$CASE_ID"
+TYPES=$(echo "$LINES" | grep -o 'eventType:[a-z._]*' | head -2 | tr '\n' ' ')
+check PLAT-E72 "case.case.events: case.created then case.routed, key = caseId" \
+  "$([[ "$TYPES" == "eventType:case.created eventType:case.routed " ]]; echo $?)"
+
+T_ADMIN=$(token admin.in 'Staff#Pass12')
+CARE_SUB=6f1c0a10-0101-4a00-8000-000000000101          # care.in (user 101)
+call GET "$CASE/cases?limit=1" "$T_CARE"                  # caches care.in's principal
+call POST "$IAM/grants" "$T_ADMIN" '{"userId":"101","roleCode":"QUALITY_INVESTIGATOR","countryCodes":["IN"],"buCodes":["CP"],"reason":"Smoke: event flow"}'
+GRANT_ID=$(json "$TMP/body" "['grantId']")
+await_topic iam.grant.events " | $GRANT_ID | "
+check PLAT-E71 "iam.grant.events: grant $GRANT_ID, key = grantId, header eventType=iam.grant.created" \
+  "$([[ -n "$GRANT_ID" && "$LINES" == *eventType:iam.grant.created* ]]; echo $?)"
+check PLAT-E74a "grant created → care.in's cached principal evicted within 10 s" "$(await_evicted "$CARE_SUB"; echo $?)"
+
+call GET "$CASE/cases?limit=1" "$T_CARE"                  # cached again
+call DELETE "$IAM/grants/$GRANT_ID?reason=Smoke%20done" "$T_ADMIN"
+check PLAT-E74b "grant revoked → evicted again within 10 s (no 5-minute TTL wait)" \
+  "$([[ $STATUS == 200 ]] && await_evicted "$CARE_SUB"; echo $?)"
+
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""
 check PLAT-S11a "no token → 401 problem+json" "$([[ $STATUS == 401 && $(header Content-Type) == application/problem+json* ]]; echo $?)"
