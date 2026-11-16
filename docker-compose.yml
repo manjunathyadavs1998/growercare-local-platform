@@ -6,7 +6,7 @@ name: growercare
 
 services:
   postgres:
-    image: postgres:17.6-alpine
+    image: postgres:17.11-alpine
     container_name: gc-postgres
     environment:
       POSTGRES_USER: ${PG_SUPERUSER}
