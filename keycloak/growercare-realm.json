@@ -108,6 +108,50 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "catalog-registry-service",
+      "name": "catalog-registry-service (service-to-service)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "dev-catalog-registry-service-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "aud-gc-internal",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "gc-internal",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "erp-sync",
+      "name": "erp-sync (catalog import from ERP / regulatory, local stand-in)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "dev-erp-sync-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "aud-gc-internal",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "gc-internal",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
     }
   ],
   "users": [

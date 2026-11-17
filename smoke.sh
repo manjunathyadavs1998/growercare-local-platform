@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPEC-PLAT-01 R10: end-to-end smoke test against the real local stack
 # (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082 + grower-service :8084
-#  + notification-service :8085 with the dev mailbox).
+#  + notification-service :8085 with the dev mailbox + catalog-registry-service :8086).
 # Real Keycloak tokens (client gc-dev-cli). Prints a PASS/FAIL table; exit code = number of failed checks.
 set -uo pipefail
 
@@ -10,6 +10,7 @@ IAM=${IAM:-http://localhost:8081}
 CASE=${CASE:-http://localhost:8082}
 GROWER=${GROWER:-http://localhost:8084}
 NOTIFY=${NOTIFY:-http://localhost:8085}
+CATALOG=${CATALOG:-http://localhost:8086}
 PY=${PY:-python}
 export PYTHONIOENCODING=utf-8                  # message bodies are Marathi/Hindi: read and print UTF-8, not the Windows code page
 TMP=$(mktemp -d)
@@ -43,7 +44,7 @@ header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'
 echo "== GrowerCare smoke test =="
 
 # ---------------------------------------------------------------- S01 health
-for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "$NOTIFY/actuator/health" "http://localhost:8180/realms/growercare"; do
+for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "$NOTIFY/actuator/health" "$CATALOG/actuator/health" "http://localhost:8180/realms/growercare"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
 done
@@ -262,6 +263,51 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 check GRW-E133 "after confirmation case-service accepts a case for the grower within 20 s (PRD J2)" "$([[ -n "$J2_CASE" ]]; echo $?)"
+
+# ---------------------------------------------------------------- SPEC-GRW-02 + SPEC-CAT-01 + SPEC-CASE-08: PRD J3 farms, J4 complaint
+G1=110165911145454593
+FKEY=$("$PY" -c "import uuid; print(uuid.uuid4())")
+call POST "$GROWER/growers/$G1/farms" "$T_GROWER" '{"name":"Smoke vineyard","areaHa":1.5,"crops":["GRAPE"],"location":{"latitude":18.531234,"longitude":73.861234}}' \
+  -H "Idempotency-Key: $FKEY"
+FARM_ID=$(json "$TMP/body" "['farmId']")
+check GRW-E200 "grower.in1 adds a farm → 201, exact location for the grower" \
+  "$([[ $STATUS == 201 && $(json "$TMP/body" "['locationPrecision']") == EXACT ]]; echo $?)"
+call GET "$GROWER/growers/$G1/farms/$FARM_ID" "$T_CARE"
+check GRW-E208 "care.in (MASKED) sees the district, not the field" \
+  "$([[ $STATUS == 200 && $(json "$TMP/body" "['location']['latitude']") == 18.5 && $(json "$TMP/body" "['locationPrecision']") == DISTRICT ]]; echo $?)"
+
+call GET "$CATALOG/products?country=IN&q=azo" "$T_GROWER"
+check CAT-E1 "grower.in1 finds Azoxa Duo in the India catalog" "$([[ $STATUS == 200 && $(json "$TMP/body" "['items'][0]['productId']") == 9001 ]]; echo $?)"
+call GET "$CATALOG/products?country=BR" "$T_GROWER"
+check CAT-E4 "grower.in1 cannot browse Brazil's catalog → 404" "$([[ $STATUS == 404 ]]; echo $?)"
+call GET "$CATALOG/products/9001/batches/AZX2604-117" "$T_GROWER"
+check CAT-E6 "the batch on the pack is a batch of that product → 200" "$([[ $STATUS == 200 ]]; echo $?)"
+
+# J3/J4: a complaint on the new farm (case-service learns the farm by event or read-through)
+call POST "$CASE/cases" "$T_GROWER" "{\"growerId\":\"$G1\",\"caseType\":\"PRODUCT_COMPLAINT\",\"title\":\"Smoke: spots on grapes\",\"description\":\"Brown spots after spraying\",\"farmId\":\"$FARM_ID\",\"productId\":\"9001\",\"batchNo\":\"AZX2604-117\"}" \
+  -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+check GRW-E222 "grower.in1 raises a complaint on the farm just added → 201 (PRD J3)" "$([[ $STATUS == 201 && $(json "$TMP/body" "['farmId']") == "$FARM_ID" ]]; echo $?)"
+call POST "$CASE/cases" "$T_GROWER" "{\"growerId\":\"$G1\",\"caseType\":\"PRODUCT_COMPLAINT\",\"title\":\"Smoke: unknown batch\",\"description\":\"Batch not on any pack\",\"farmId\":\"$FARM_ID\",\"productId\":\"9001\",\"batchNo\":\"NOPE-0001\"}" \
+  -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+check CASE-E181 "an unknown batch is refused with a clear rule → 422 case.batch-unknown (PRD J4)" \
+  "$([[ $STATUS == 422 && $(json "$TMP/body" "['rule']") == case.batch-unknown ]]; echo $?)"
+
+# a product the ERP sync adds now reaches case-service without any seed: import → event / read-through → case
+ERP_SECRET=$("$PY" -c "import json; print([c for c in json.load(open('$(dirname "$0")/keycloak/growercare-realm.json', encoding='utf-8'))['clients'] if c['clientId']=='erp-sync'][0]['secret'])")
+T_ERP=$(curl -fsS -X POST "$KC/protocol/openid-connect/token" -d grant_type=client_credentials -d client_id=erp-sync \
+  -d client_secret="$ERP_SECRET" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+PCODE="SMK-$("$PY" -c "import random; print(random.randint(100000, 999999))")"
+call PUT "$CATALOG/internal/products/$PCODE" "$T_ERP" '{"buCode":"CP","name":"Smoke Fungicide 250 EC","kind":"FUNGICIDE","status":"ACTIVE","version":1,"activeIngredients":[{"name":"Smokazole","concentration":"250 g/L"}],"packSizes":["1 L"]}'
+NEW_PRODUCT=$(json "$TMP/body" "['productId']")
+call PUT "$CATALOG/internal/products/$PCODE/registrations/IN" "$T_ERP" '{"registrationNo":"CIR-SMOKE","status":"REGISTERED","validUntil":"2030-12-31","version":1}'
+REG_STATUS=$STATUS
+call PUT "$CATALOG/internal/products/$PCODE/batches/SMK-0001" "$T_ERP" '{"mfgDate":"2026-10-01","expiryDate":"2028-09-30","plantCode":"IN-GOA","status":"RELEASED","version":1}'
+check CAT-E10 "erp-sync imports a new product, its India registration and a batch → 201 ×3" \
+  "$([[ -n "$NEW_PRODUCT" && $REG_STATUS == 201 && $STATUS == 201 ]]; echo $?)"
+call POST "$CASE/cases" "$T_GROWER" "{\"growerId\":\"$G1\",\"caseType\":\"PRODUCT_COMPLAINT\",\"title\":\"Smoke: new product\",\"description\":\"Complaint about a product added today\",\"productId\":\"$NEW_PRODUCT\",\"batchNo\":\"SMK-0001\"}" \
+  -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+check CASE-E172 "a complaint about the newly imported product and batch → 201, BU from the catalog (no seed)" \
+  "$([[ $STATUS == 201 && $(json "$TMP/body" "['buCode']") == CP ]]; echo $?)"
 
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""
