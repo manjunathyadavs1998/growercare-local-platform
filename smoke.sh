@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # SPEC-PLAT-01 R10: end-to-end smoke test against the real local stack
-# (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082, profile local).
+# (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082 + grower-service :8084).
 # Real Keycloak tokens (client gc-dev-cli). Prints a PASS/FAIL table; exit code = number of failed checks.
 set -uo pipefail
 
 KC=${KC:-http://localhost:8180/realms/growercare}
 IAM=${IAM:-http://localhost:8081}
 CASE=${CASE:-http://localhost:8082}
+GROWER=${GROWER:-http://localhost:8084}
 PY=${PY:-python}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -39,7 +40,7 @@ header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'
 echo "== GrowerCare smoke test =="
 
 # ---------------------------------------------------------------- S01 health
-for target in "$IAM/actuator/health" "$CASE/actuator/health" "http://localhost:8180/realms/growercare"; do
+for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "http://localhost:8180/realms/growercare"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
 done
@@ -175,6 +176,46 @@ call GET "$CASE/cases?limit=1" "$T_CARE"                  # cached again
 call DELETE "$IAM/grants/$GRANT_ID?reason=Smoke%20done" "$T_ADMIN"
 check PLAT-E74b "grant revoked → evicted again within 10 s (no 5-minute TTL wait)" \
   "$([[ $STATUS == 200 ]] && await_evicted "$CARE_SUB"; echo $?)"
+
+# ---------------------------------------------------------------- SPEC-GRW-01: grower-service (registry, phone search, events)
+call POST "$GROWER/growers/search" "$T_CARE" '{"phone":"+919876543210","countryCode":"IN"}'
+check GRW-E60 "care.in finds G1 by phone (POST body, name masked)" \
+  "$([[ $STATUS == 200 && $(json "$TMP/body" "['items'][0]['displayName']") == 'R***** P****' ]]; echo $?)"
+
+PHONE="+919$("$PY" -c "import random; print(random.randint(100000000, 999999999))")"     # fresh per run
+GKEY=$("$PY" -c "import uuid; print(uuid.uuid4())")
+GBODY="{\"territoryId\":\"1002\",\"displayName\":\"Smoke Grower\",\"phone\":\"$PHONE\",\"preferredLanguage\":\"mr\"}"
+call POST "$GROWER/growers" "$T_CARE" "$GBODY" -H "Idempotency-Key: $GKEY"
+GROWER_ID=$(json "$TMP/body" "['growerId']")
+check GRW-E21 "care.in registers an assisted grower → 201 PENDING_CONSENT" \
+  "$([[ $STATUS == 201 && $(json "$TMP/body" "['status']") == PENDING_CONSENT ]]; echo $?)"
+call POST "$GROWER/growers" "$T_CARE" "$GBODY" -H "Idempotency-Key: $GKEY"
+check GRW-E30 "same Idempotency-Key replays → 200 + Idempotent-Replayed" \
+  "$([[ $STATUS == 200 && $(header Idempotent-Replayed) == true && $(json "$TMP/body" "['growerId']") == "$GROWER_ID" ]]; echo $?)"
+
+call GET "$GROWER/growers/$GROWER_ID" "$T_TM"
+check GRW-E42 "tm.in reads it with the full name (FULL clearance), no phone field" \
+  "$([[ $STATUS == 200 && $(json "$TMP/body" "['displayName']") == 'Smoke Grower' && $(header ETag) == '"0"' && $(json "$TMP/body" "['phone']") == '' ]]; echo $?)"
+call PATCH "$GROWER/growers/$GROWER_ID" "$T_CARE" '{"preferredLanguage":"hi"}' -H 'If-Match: "0"'
+check GRW-E43 "care.in updates the language with If-Match → 200, ETag \"1\"" \
+  "$([[ $STATUS == 200 && $(header ETag) == '"1"' ]]; echo $?)"
+
+# case-service's own client secret, from the env file the service itself runs with (never a copy in this script)
+CASE_ENV="$(dirname "$0")/services/case-service.env"; [[ -f "$CASE_ENV" ]] || CASE_ENV="$CASE_ENV.example"
+CASE_SECRET=$(grep '^IAM_CLIENT_SECRET=' "$CASE_ENV" | cut -d= -f2 | tr -d '\r')
+T_CASE_SVC=$(curl -fsS -X POST "$KC/protocol/openid-connect/token" -d grant_type=client_credentials \
+  -d client_id=case-service -d client_secret="$CASE_SECRET" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+call GET "$GROWER/internal/growers/$GROWER_ID" "$T_CASE_SVC"
+check GRW-E72 "case-service reads the replica view (client credentials): phone only as HMAC + last 4" \
+  "$([[ $STATUS == 200 && $(json "$TMP/body" "['phoneLast4']") == "${PHONE: -4}" && -n $(json "$TMP/body" "['phoneHmac']") ]]; echo $?)"
+
+# both events must have arrived: the PATCH ran just before, so grower.updated may still be in flight (outbox → Debezium)
+for _ in 1 2 3 4 5; do
+  await_topic grower.grower.events " | $GROWER_ID | " && [[ $(echo "$LINES" | grep -c "eventType:grower.updated") -ge 1 ]] && break
+done
+GTYPES=$(echo "$LINES" | grep -o 'eventType:[a-z._]*' | head -2 | tr '\n' ' ')
+check GRW-R55 "grower.grower.events: grower.registered then grower.updated, key = growerId, no phone" \
+  "$([[ "$GTYPES" == "eventType:grower.registered eventType:grower.updated " && "$LINES" != *"${PHONE:3}"* ]]; echo $?)"
 
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""
