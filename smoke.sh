@@ -69,7 +69,9 @@ check PLAT-S02 "IAM /me as care.in → CARE_AGENT" "$([[ $STATUS == 200 && $(jso
 
 # ---------------------------------------------------------------- S03/S04 create + idempotent replay
 KEY=$("$PY" -c "import uuid; print(uuid.uuid4())")
-BODY='{"growerId":"70001","caseType":"PRODUCT_COMPLAINT","title":"Smoke: leaves yellowing","description":"Spots after spray (smoke test)","farmId":"80001","productId":"9001","batchNo":"AZX2604-117"}'
+# SPEC-CASE-06 E152a: G1 by its grower-service id (the case replica's seed follows grower-service, D6)
+G1=110165911145454593
+BODY='{"growerId":"'$G1'","caseType":"PRODUCT_COMPLAINT","title":"Smoke: leaves yellowing","description":"Spots after spray (smoke test)","farmId":"80011","productId":"9001","batchNo":"AZX2604-117"}'
 call POST "$CASE/cases" "$T_GROWER" "$BODY" -H "Idempotency-Key: $KEY"
 CASE_ID=$(json "$TMP/body" "['caseId']"); CASE_NO=$(json "$TMP/body" "['caseNo']")
 check PLAT-S03 "grower.in1 creates a case (via IAM client-credentials) → 201, case_no 71-…" "$([[ $STATUS == 201 && $CASE_NO == 71-* ]]; echo $?)"
@@ -189,6 +191,11 @@ call POST "$GROWER/growers" "$T_CARE" "$GBODY" -H "Idempotency-Key: $GKEY"
 GROWER_ID=$(json "$TMP/body" "['growerId']")
 check GRW-E21 "care.in registers an assisted grower → 201 PENDING_CONSENT" \
   "$([[ $STATUS == 201 && $(json "$TMP/body" "['status']") == PENDING_CONSENT ]]; echo $?)"
+# SPEC-CASE-06 E152b: case-service learns the new grower across services (event or read-through) and respects consent
+CKEY=$("$PY" -c "import uuid; print(uuid.uuid4())")
+call POST "$CASE/cases" "$T_CARE" "{\"growerId\":\"$GROWER_ID\",\"caseType\":\"AGRONOMY_ADVICE\",\"title\":\"Smoke: pending grower\",\"description\":\"Should wait for consent\",\"buCode\":\"CP\"}" -H "Idempotency-Key: $CKEY"
+check CASE-E152b "case for the new assisted grower (PENDING_CONSENT) → 422 case.grower-not-active"   "$([[ $STATUS == 422 && $(json "$TMP/body" "['rule']") == case.grower-not-active ]]; echo $?)"
+
 call POST "$GROWER/growers" "$T_CARE" "$GBODY" -H "Idempotency-Key: $GKEY"
 check GRW-E30 "same Idempotency-Key replays → 200 + Idempotent-Replayed" \
   "$([[ $STATUS == 200 && $(header Idempotent-Replayed) == true && $(json "$TMP/body" "['growerId']") == "$GROWER_ID" ]]; echo $?)"
