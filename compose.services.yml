@@ -24,6 +24,7 @@ services:
   grower-service:
     image: ghcr.io/manjunathyadavs1998/grower-service:${GROWER_IMAGE_TAG:-latest}
     container_name: gc-grower
+    profiles: ["grower"]
     env_file: services/grower-service.env
     ports:
       - "8084:8084"                                # 8083 is Kafka Connect
@@ -35,6 +36,7 @@ services:
   notification-service:
     image: ghcr.io/manjunathyadavs1998/notification-service:${NOTIFICATION_IMAGE_TAG:-latest}
     container_name: gc-notification
+    profiles: ["grower"]                         # grower-service sends its one-time codes through it
     env_file: services/notification-service.env
     ports:
       - "8085:8085"                                # dev mailbox: http://localhost:8085/dev/mailbox/ui?recipient=...
@@ -43,6 +45,7 @@ services:
   catalog-registry-service:
     image: ghcr.io/manjunathyadavs1998/catalog-registry-service:${CATALOG_IMAGE_TAG:-latest}
     container_name: gc-catalog
+    profiles: ["catalog"]
     env_file: services/catalog-registry-service.env
     ports:
       - "8086:8086"
