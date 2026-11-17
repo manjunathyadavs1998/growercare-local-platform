@@ -3,7 +3,7 @@
   "enabled": true,
   "displayName": "GrowerCare (local dev)",
   "sslRequired": "external",
-  "registrationAllowed": false,
+  "registrationAllowed": true,
   "loginWithEmailAllowed": false,
   "duplicateEmailsAllowed": false,
   "bruteForceProtected": true,

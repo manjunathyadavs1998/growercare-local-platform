@@ -17,6 +17,7 @@ Services live in their own repositories and join this platform's Docker network,
 cp .env.example .env                       # dev-only credentials; .env is git-ignored
 docker compose up -d --wait
 ./debezium/register.sh                     # after the services have migrated their databases once
+./keycloak/configure-registration.sh       # grower self-registration: phone-number usernames (SPEC-IAM-03), idempotent
 ```
 
 **Upgrading an existing stack** (init scripts and the realm import only run on an empty volume / a new realm):
