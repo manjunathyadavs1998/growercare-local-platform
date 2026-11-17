@@ -5,7 +5,7 @@ Services live in their own repositories and join this platform's Docker network,
 
 | Container | Port (host) | What |
 |---|---|---|
-| `gc-postgres` | 5432 | PostgreSQL 17. `postgres/01-init.sh` creates one database per service (`gc_iam`, `gc_case`), each with an owner role (migrations) and a DML-only app role; `02-cdc-role.sh` creates the Debezium role; `03-grower-db.sh` adds `gc_grower`, `04-notification-db.sh` adds `gc_notification` |
+| `gc-postgres` | 5432 | PostgreSQL 17. `postgres/01-init.sh` creates one database per service (`gc_iam`, `gc_case`), each with an owner role (migrations) and a DML-only app role; `02-cdc-role.sh` creates the Debezium role; `03-grower-db.sh` adds `gc_grower`, `04-notification-db.sh` adds `gc_notification`, `05-catalog-db.sh` adds `gc_catalog` |
 | `gc-redis` | 6379 | Redis 7.4 (principal cache; never a system of record) |
 | `gc-keycloak` | 8180 | Keycloak 26.8, realm `growercare` with dev users (`keycloak/growercare-realm.json`) |
 | `gc-kafka` | 9094 | Kafka 4.3 (KRaft). Containers use `kafka:9092` |
@@ -22,8 +22,9 @@ docker compose up -d --wait
 **Upgrading an existing stack** (init scripts and the realm import only run on an empty volume / a new realm):
 - grower-service (`gc_grower` database + Keycloak client `grower-service`): add `GC_GROWER_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-grower-service.sh` (idempotent).
 - notification-service (`gc_notification` database): add `GC_NOTIFICATION_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-notification-service.sh` (idempotent). Add `NOTIFICATION_BASE_URL` to `services/grower-service.env`.
+- catalog-registry-service (`gc_catalog` database + Keycloak clients `catalog-registry-service` and `erp-sync`): add `GC_CATALOG_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-catalog-service.sh` (idempotent). Add `CATALOG_BASE_URL` to `services/case-service.env` and `catalog-registry-service` to IAM's `GC_INTERNAL_CLIENTS`; re-run `./debezium/register.sh` for the `catalog-outbox` connector.
 
-Service ports on the host: identity-access-service 8081, case-service 8082, grower-service **8084** (8083 is Kafka Connect), notification-service 8085.
+Service ports on the host: identity-access-service 8081, case-service 8082, grower-service **8084** (8083 is Kafka Connect), notification-service 8085, catalog-registry-service 8086.
 
 **Dev mailbox (local only):** notification-service stores SMS, WhatsApp and email messages instead of sending them. Read one-time codes at `http://localhost:8085/dev/mailbox/ui?recipient=%2B919876543210` (or `/dev/mailbox?recipient=…` as JSON).
 

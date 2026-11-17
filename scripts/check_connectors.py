@@ -40,6 +40,9 @@ TABLES = [
     ("PLAT-R52 grower: growers not captured", "grower", "in_s39.grower", False),
     ("PLAT-R52 grower: user links not captured", "grower", "dir.grower_user_link", False),
     ("PLAT-R62 grower: heartbeat not routed", "grower", "msg.cdc_heartbeat", False),
+    ("PLAT-R52 catalog: outbox captured", "catalog", "catalog.outbox", True),
+    ("PLAT-R52 catalog: products not captured", "catalog", "catalog.product", False),
+    ("PLAT-R62 catalog: heartbeat not routed", "catalog", "catalog.cdc_heartbeat", False),
 ]
 
 
@@ -55,7 +58,7 @@ def main() -> int:
         print(("ok   " if ok else "FAIL ") + name + ("" if ok else f"  ({detail})"))
         failures += 0 if ok else 1
 
-    for svc in ("case", "iam", "grower"):
+    for svc in ("case", "iam", "grower", "catalog"):
         cfg = config(svc)
         for name, key, expected in SETTINGS:
             expected = expected.replace("{svc}", svc)
