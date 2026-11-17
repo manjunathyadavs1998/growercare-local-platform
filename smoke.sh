@@ -206,7 +206,10 @@ call GET "$GROWER/internal/growers/$GROWER_ID" "$T_CASE_SVC"
 check GRW-E72 "case-service reads the replica view (client credentials): phone only as HMAC + last 4" \
   "$([[ $STATUS == 200 && $(json "$TMP/body" "['phoneLast4']") == "${PHONE: -4}" && -n $(json "$TMP/body" "['phoneHmac']") ]]; echo $?)"
 
-await_topic grower.grower.events " | $GROWER_ID | "
+# both events must have arrived: the PATCH ran just before, so grower.updated may still be in flight (outbox → Debezium)
+for _ in 1 2 3 4 5; do
+  await_topic grower.grower.events " | $GROWER_ID | " && [[ $(echo "$LINES" | grep -c "eventType:grower.updated") -ge 1 ]] && break
+done
 GTYPES=$(echo "$LINES" | grep -o 'eventType:[a-z._]*' | head -2 | tr '\n' ' ')
 check GRW-R55 "grower.grower.events: grower.registered then grower.updated, key = growerId, no phone" \
   "$([[ "$GTYPES" == "eventType:grower.registered eventType:grower.updated " && "$LINES" != *"${PHONE:3}"* ]]; echo $?)"
