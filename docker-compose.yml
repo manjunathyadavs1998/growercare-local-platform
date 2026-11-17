@@ -141,7 +141,7 @@ services:
   # Kafka Connect with the Debezium connectors (MSK Connect in AWS). Connectors are registered by
   # debezium/register.sh; the CDC password comes from the environment (config provider "env").
   connect:
-    image: quay.io/debezium/connect:3.6.2.Final
+    image: quay.io/debezium/connect:3.7.0.Final
     container_name: gc-connect
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
