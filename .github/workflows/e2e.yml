@@ -1,0 +1,66 @@
+# End-to-end smoke on a GitHub runner (16 GB): the whole stack as the released images, every smoke section.
+# Laptops run subsets (COMPOSE_PROFILES + ./smoke.sh <sections>); this job proves the complete system.
+# Informational (not a required check): it tests :latest images of the services, not only this repository.
+name: e2e
+
+on:
+  pull_request:
+  schedule:
+    - cron: "30 2 * * *"          # nightly, after the day's merges have published new :latest images
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PY: python3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Environment files (dev values from the examples)
+        run: |
+          cp .env.example .env
+          for f in services/*.env.example; do cp "$f" "${f%.example}"; done
+          # the repository's scripts call "python"; the runner only has python3
+          sudo ln -sf "$(command -v python3)" /usr/local/bin/python
+
+      - name: Infrastructure
+        run: docker compose up -d --wait
+
+      - name: Services (released images)
+        run: |
+          docker compose -f compose.services.yml pull --quiet
+          docker compose -f compose.services.yml up -d
+
+      - name: Wait for the services
+        run: |
+          for i in $(seq 1 90); do
+            ok=0
+            for port in 8081 8082 8084 8085 8086; do
+              curl -fs -o /dev/null "http://localhost:$port/actuator/health" && ok=$((ok + 1))
+            done
+            [ "$ok" = 5 ] && { echo "all healthy after $((i * 5)) s"; exit 0; }
+            sleep 5
+          done
+          echo "services not healthy after 450 s"; exit 1
+
+      - name: Debezium connectors
+        run: ./debezium/register.sh
+
+      - name: Smoke (all sections)
+        run: ./smoke.sh
+
+      - name: Container logs
+        if: failure()
+        run: |
+          docker compose -f compose.services.yml ps
+          docker compose -f compose.services.yml logs --no-color --tail 200
+          docker compose logs --no-color --tail 80

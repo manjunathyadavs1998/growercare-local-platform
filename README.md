@@ -45,6 +45,31 @@ Inside the network, services reach the infrastructure by container name:
 
 Tokens are issued for `http://localhost:8180/realms/growercare`, so services validate that issuer (`OIDC_ISSUER_URI`) and fetch keys from `OIDC_JWKS_URI`.
 
+## Running on a laptop (16 GB)
+The whole stack (infrastructure plus six services) needs about 5 GB inside Docker's VM and does not fit next to Windows,
+an IDE and a browser on a 16 GB laptop. Run what you are working on and let CI run everything:
+
+- **Profiles** (`COMPOSE_PROFILES` in `.env`; default `events,grower,catalog` = everything). Core is always on: Postgres,
+  Redis, Keycloak, Kafka, SeaweedFS, identity-access-service, case-service.
+  - `events`: Kafka Connect / Debezium (the heaviest container, about 400 MB).
+  - `grower`: grower-service and notification-service.
+  - `catalog`: catalog-registry-service.
+- **Smoke sections** match them: `./smoke.sh` runs all; `./smoke.sh core grower` runs a subset (`catalog` needs `grower`).
+
+  ```bash
+  COMPOSE_PROFILES=grower docker compose up -d --wait
+  COMPOSE_PROFILES=grower docker compose -f compose.services.yml up -d
+  ./smoke.sh core grower
+  ```
+- **Everything, every night and on every PR:** `.github/workflows/e2e.yml` starts the full stack from the released images
+  on a GitHub runner and runs all smoke sections.
+- **Stop before closing Docker:** `docker compose -f compose.services.yml stop && docker compose stop`. After an unclean
+  stop Postgres recovers with one `syncfs` (`recovery_init_sync_method`), not an fsync per file.
+- **Windows:** WSL2 keeps freed memory as cache. `autoMemoryReclaim=gradual` under `[experimental]` in
+  `%USERPROFILE%\.wslconfig` returns it to Windows (restart WSL after changing it).
+- **Heaps are capped:** every service runs `-Xmx256m` (case-service 384m) with serial GC; Keycloak, Kafka and Connect are
+  capped in `docker-compose.yml`.
+
 ## Checks
 - `python3 scripts/check_connectors.py`: Debezium connector settings (SPEC-PLAT-04).
 - CI also validates both compose files and the shell scripts.

@@ -41,10 +41,26 @@ check() { # id description condition-result(0/1)
 
 header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'; }
 
-echo "== GrowerCare smoke test =="
+# Sections (SPEC-PLAT-06): run what the started compose profiles cover. Default: everything.
+#   core    IAM + case: auth, lifecycle, isolation, attachments, errors     (always-on containers)
+#   events  outbox → Debezium → Kafka, principal-cache eviction            (profile events)
+#   grower  grower registry, PRD J2 with OTP via notification-service      (profile grower)
+#   catalog PRD J3 farms + J4 catalog complaint                            (profiles grower + catalog)
+SECTIONS=" ${*:-core events grower catalog} "
+want() { [[ "$SECTIONS" == *" $1 "* ]]; }
+for s in $SECTIONS; do
+  [[ " core events grower catalog " == *" $s "* ]] || { echo "unknown section: $s (core events grower catalog)" >&2; exit 2; }
+done
+want core || { echo "section core is required (tokens, the case later checks use)" >&2; exit 2; }
+if want catalog && ! want grower; then echo "section catalog needs grower (farms live in grower-service)" >&2; exit 2; fi
+
+echo "== GrowerCare smoke test:${SECTIONS}=="
 
 # ---------------------------------------------------------------- S01 health
-for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "$NOTIFY/actuator/health" "$CATALOG/actuator/health" "http://localhost:8180/realms/growercare"; do
+TARGETS=("$IAM/actuator/health" "$CASE/actuator/health" "http://localhost:8180/realms/growercare")
+want grower && TARGETS+=("$GROWER/actuator/health" "$NOTIFY/actuator/health")
+want catalog && TARGETS+=("$CATALOG/actuator/health")
+for target in "${TARGETS[@]}"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
 done
@@ -164,6 +180,7 @@ await_evicted() { # subject → 0 once evicted within 10 s
   for _ in $(seq 1 20); do [[ $(cached "$1") == 0 ]] && return 0; sleep 0.5; done; return 1
 }
 
+if want events; then
 await_topic case.case.events "$CASE_ID"
 TYPES=$(echo "$LINES" | grep -o 'eventType:[a-z._]*' | head -2 | tr '\n' ' ')
 check PLAT-E72 "case.case.events: case.created then case.routed, key = caseId" \
@@ -183,7 +200,9 @@ call GET "$CASE/cases?limit=1" "$T_CARE"                  # cached again
 call DELETE "$IAM/grants/$GRANT_ID?reason=Smoke%20done" "$T_ADMIN"
 check PLAT-E74b "grant revoked → evicted again within 10 s (no 5-minute TTL wait)" \
   "$([[ $STATUS == 200 ]] && await_evicted "$CARE_SUB"; echo $?)"
+fi   # events
 
+if want grower; then
 # ---------------------------------------------------------------- SPEC-GRW-01: grower-service (registry, phone search, events)
 call POST "$GROWER/growers/search" "$T_CARE" '{"phone":"+919876543210","countryCode":"IN"}'
 check GRW-E60 "care.in finds G1 by phone (POST body, name masked)" \
@@ -221,6 +240,7 @@ call GET "$GROWER/internal/growers/$GROWER_ID" "$T_CASE_SVC"
 check GRW-E72 "case-service reads the replica view (client credentials): phone only as HMAC + last 4" \
   "$([[ $STATUS == 200 && $(json "$TMP/body" "['phoneLast4']") == "${PHONE: -4}" && -n $(json "$TMP/body" "['phoneHmac']") ]]; echo $?)"
 
+if want events; then
 # both events must have arrived: the PATCH ran just before, so grower.updated may still be in flight (outbox → Debezium)
 for _ in 1 2 3 4 5; do
   await_topic grower.grower.events " | $GROWER_ID | " && [[ $(echo "$LINES" | grep -c "eventType:grower.updated") -ge 1 ]] && break
@@ -228,6 +248,7 @@ done
 GTYPES=$(echo "$LINES" | grep -o 'eventType:[a-z._]*' | head -2 | tr '\n' ' ')
 check GRW-R55 "grower.grower.events: grower.registered then grower.updated, key = growerId, no phone" \
   "$([[ "$GTYPES" == "eventType:grower.registered eventType:grower.updated " && "$LINES" != *"${PHONE:3}"* ]]; echo $?)"
+fi   # events
 
 # ---------------------------------------------------------------- SPEC-GRW-03 + SPEC-NOT-01: PRD J2, assisted onboarding with OTP
 PHONE2="+919$("$PY" -c "import random; print(random.randint(100000000, 999999999))")"
@@ -255,6 +276,7 @@ CONSENTS=$(json "$TMP/body" "['items']")     # ordered by purpose: MARKETING, SE
 check GRW-E120 "care.in reads the consents: SERVICE granted, ASSISTED by retailer.in (201)"   "$([[ $STATUS == 200 && $CONSENTS == *"'purpose': 'SERVICE', 'granted': True"*"'channel': 'ASSISTED', 'recordedByUserId': '201'"* ]]; echo $?)"
 
 # PRD J2: a case is accepted only after confirmation; case-service learns it from grower.updated (outbox → Debezium)
+if want events; then
 J2_CASE=""
 for _ in $(seq 1 20); do
   call POST "$CASE/cases" "$T_CARE" "{\"growerId\":\"$J2_ID\",\"caseType\":\"AGRONOMY_ADVICE\",\"title\":\"Smoke: activated grower\",\"description\":\"Accepted after consent\",\"buCode\":\"CP\"}"     -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
@@ -263,7 +285,10 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 check GRW-E133 "after confirmation case-service accepts a case for the grower within 20 s (PRD J2)" "$([[ -n "$J2_CASE" ]]; echo $?)"
+fi   # events
+fi   # grower
 
+if want catalog; then
 # ---------------------------------------------------------------- SPEC-GRW-02 + SPEC-CAT-01 + SPEC-CASE-08: PRD J3 farms, J4 complaint
 G1=110165911145454593
 FKEY=$("$PY" -c "import uuid; print(uuid.uuid4())")
@@ -309,6 +334,8 @@ call POST "$CASE/cases" "$T_GROWER" "{\"growerId\":\"$G1\",\"caseType\":\"PRODUC
   -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
 check CASE-E172 "a complaint about the newly imported product and batch → 201, BU from the catalog (no seed)" \
   "$([[ $STATUS == 201 && $(json "$TMP/body" "['buCode']") == CP ]]; echo $?)"
+
+fi   # catalog
 
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""
