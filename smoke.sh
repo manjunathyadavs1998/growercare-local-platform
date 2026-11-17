@@ -299,11 +299,12 @@ T_ERP=$(curl -fsS -X POST "$KC/protocol/openid-connect/token" -d grant_type=clie
 PCODE="SMK-$("$PY" -c "import random; print(random.randint(100000, 999999))")"
 call PUT "$CATALOG/internal/products/$PCODE" "$T_ERP" '{"buCode":"CP","name":"Smoke Fungicide 250 EC","kind":"FUNGICIDE","status":"ACTIVE","version":1,"activeIngredients":[{"name":"Smokazole","concentration":"250 g/L"}],"packSizes":["1 L"]}'
 NEW_PRODUCT=$(json "$TMP/body" "['productId']")
+PRODUCT_STATUS=$STATUS
 call PUT "$CATALOG/internal/products/$PCODE/registrations/IN" "$T_ERP" '{"registrationNo":"CIR-SMOKE","status":"REGISTERED","validUntil":"2030-12-31","version":1}'
 REG_STATUS=$STATUS
 call PUT "$CATALOG/internal/products/$PCODE/batches/SMK-0001" "$T_ERP" '{"mfgDate":"2026-10-01","expiryDate":"2028-09-30","plantCode":"IN-GOA","status":"RELEASED","version":1}'
 check CAT-E10 "erp-sync imports a new product, its India registration and a batch → 201 ×3" \
-  "$([[ -n "$NEW_PRODUCT" && $REG_STATUS == 201 && $STATUS == 201 ]]; echo $?)"
+  "$([[ $PRODUCT_STATUS == 201 && -n "$NEW_PRODUCT" && $REG_STATUS == 201 && $STATUS == 201 ]]; echo $?)"
 call POST "$CASE/cases" "$T_GROWER" "{\"growerId\":\"$G1\",\"caseType\":\"PRODUCT_COMPLAINT\",\"title\":\"Smoke: new product\",\"description\":\"Complaint about a product added today\",\"productId\":\"$NEW_PRODUCT\",\"batchNo\":\"SMK-0001\"}" \
   -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
 check CASE-E172 "a complaint about the newly imported product and batch → 201, BU from the catalog (no seed)" \
