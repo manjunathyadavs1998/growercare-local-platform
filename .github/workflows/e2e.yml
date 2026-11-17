@@ -35,6 +35,9 @@ jobs:
       - name: Infrastructure
         run: docker compose up -d --wait
 
+      - name: Keycloak self-registration (SPEC-IAM-03 D1)
+        run: ./keycloak/configure-registration.sh
+
       - name: Services (released images)
         run: |
           docker compose -f compose.services.yml pull --quiet

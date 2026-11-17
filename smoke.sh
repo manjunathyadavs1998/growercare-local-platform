@@ -22,7 +22,7 @@ json() { "$PY" -c "import sys,json; d=json.load(open(sys.argv[1], encoding='utf-
 
 token() { # user password
   curl -fsS -X POST "$KC/protocol/openid-connect/token" -d grant_type=password -d client_id=gc-dev-cli \
-       -d "username=$1" --data-urlencode "password=$2" -o "$TMP/tok.json" || { echo "token for $1 failed" >&2; return 1; }
+       --data-urlencode "username=$1" --data-urlencode "password=$2" -o "$TMP/tok.json" || { echo "token for $1 failed" >&2; return 1; }
   json "$TMP/tok.json" "['access_token']"
 }
 
@@ -286,6 +286,52 @@ for _ in $(seq 1 20); do
 done
 check GRW-E133 "after confirmation case-service accepts a case for the grower within 20 s (PRD J2)" "$([[ -n "$J2_CASE" ]]; echo $?)"
 fi   # events
+# ---------------------------------------------------------------- SPEC-IAM-03 + SPEC-GRW-06: PRD J1, a grower signs up on their own
+# Keycloak's registration page is a browser form; the admin API creates the same user (phone as username, a password).
+ENV_FILE_J1="$(dirname "$0")/.env"
+KC_ADMIN=$(grep '^KEYCLOAK_ADMIN=' "$ENV_FILE_J1" | cut -d= -f2 | tr -d '\r')
+KC_ADMIN_PW=$(grep '^KEYCLOAK_ADMIN_PASSWORD=' "$ENV_FILE_J1" | cut -d= -f2 | tr -d '\r')
+T_KC_ADMIN=$(curl -fsS -X POST "http://localhost:8180/realms/master/protocol/openid-connect/token" -d grant_type=password \
+  -d client_id=admin-cli -d "username=$KC_ADMIN" --data-urlencode "password=$KC_ADMIN_PW" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+PHONE3="+919$("$PY" -c "import random; print(random.randint(100000000, 999999999))")"
+SIGNUP_PW='Smoke#Pass123'
+call POST "http://localhost:8180/admin/realms/growercare/users" "$T_KC_ADMIN" \
+  "{\"username\":\"$PHONE3\",\"enabled\":true,\"credentials\":[{\"type\":\"password\",\"value\":\"$SIGNUP_PW\",\"temporary\":false}]}"
+T_NEW=$(token "$PHONE3" "$SIGNUP_PW")
+call GET "$IAM/me" "$T_NEW"
+NO_ACCOUNT=$STATUS
+call POST "$IAM/self-registration" "$T_NEW" '{"countryCode":"IN","displayName":"Smoke Self"}'
+check IAM-E60 "a new Keycloak user (phone as username) gets a GROWER account on the first call → 201 (before: 401)" \
+  "$([[ $NO_ACCOUNT == 401 && $STATUS == 201 && $(json "$TMP/body" "['userType']") == GROWER ]]; echo $?)"
+
+call POST "$GROWER/growers" "$T_NEW" "{\"territoryId\":\"1002\",\"displayName\":\"Smoke Self\",\"phone\":\"$PHONE3\",\"preferredLanguage\":\"mr\"}" \
+  -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+J1_ID=$(json "$TMP/body" "['growerId']")
+call GET "$GROWER/growers/me" "$T_NEW"
+check GRW-E300 "the new grower registers and finds their grower at /growers/me (PENDING_CONSENT)" \
+  "$([[ $STATUS == 200 && -n "$J1_ID" && $(json "$TMP/body" "['growerId']") == "$J1_ID" && $(json "$TMP/body" "['status']") == PENDING_CONSENT ]]; echo $?)"
+
+call GET "$GROWER/consent-notices?country=IN&language=mr" "$T_NEW"
+NOTICE=$("$PY" -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8')); print([n['version'] for n in d['items'] if n['purpose'] == 'SERVICE'][0])" "$TMP/body" 2>/dev/null)
+check GRW-E302 "the app shows the current SERVICE notice with its text" "$([[ $STATUS == 200 && -n "$NOTICE" ]]; echo $?)"
+
+call POST "$GROWER/growers/$J1_ID/verifications" "$T_NEW" '{"purpose":"ACTIVATION"}'
+VID3=$(json "$TMP/body" "['verificationId']")
+call GET "$NOTIFY/dev/mailbox?recipient=%2B${PHONE3:1}" ""
+OTP3=$(json "$TMP/body" "['items'][0]['body']" | grep -oE '[0-9]{6}' | head -1)
+call POST "$GROWER/growers/$J1_ID/verifications/$VID3/confirm" "$T_NEW" \
+  "{\"code\":\"$OTP3\",\"noticeVersion\":\"$NOTICE\",\"language\":\"mr\",\"consents\":[{\"purpose\":\"SERVICE\",\"granted\":true}]}"
+check GRW-E106 "the grower confirms the code from their phone → ACTIVE, consent SELF" "$([[ $STATUS == 200 && $(json "$TMP/body" "['status']") == ACTIVE ]]; echo $?)"
+
+J1_CASE=""
+for _ in $(seq 1 20); do       # with events running, case-service may still hold the PENDING replica for a moment
+  call POST "$CASE/cases" "$T_NEW" "{\"growerId\":\"$J1_ID\",\"caseType\":\"AGRONOMY_ADVICE\",\"title\":\"Smoke: my first question\",\"description\":\"Signed up today\",\"buCode\":\"CP\"}" \
+    -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+  [[ $STATUS == 201 ]] && { J1_CASE=$(json "$TMP/body" "['caseId']"); break; }
+  [[ $STATUS == 422 ]] || break
+  sleep 1
+done
+check IAM-E67 "the self-registered grower raises their first case → 201 (PRD J1 end to end)" "$([[ -n "$J1_CASE" ]]; echo $?)"
 fi   # grower
 
 if want catalog; then
