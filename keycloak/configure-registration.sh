@@ -24,9 +24,6 @@ for attempt in 1 2 3 4 5 6; do
   sleep 5
 done
 
-# the realm's own password policy (growercare-realm.json) is kept: it is stricter than SPEC-IAM-03 D1 asks for
-kc update realms/growercare -s registrationAllowed=true -s registrationEmailAsUsername=false \
-  -s loginWithEmailAllowed=false < /dev/null
 
 kc get users/profile -r growercare < /dev/null | "$PY" -c '
 import json, sys
@@ -40,5 +37,10 @@ for attribute in profile["attributes"]:
         attribute.pop("required", None)            # sign-up needs the phone and a password only
 print(json.dumps(profile))
 ' | kc update users/profile -r growercare -f -
+
+# Only now, with the validator in place, is registration switched on (set -e: any failure above leaves it off).
+# the realm's own password policy (growercare-realm.json) is kept: it is stricter than SPEC-IAM-03 D1 asks for
+kc update realms/growercare -s registrationAllowed=true -s registrationEmailAsUsername=false \
+  -s loginWithEmailAllowed=false < /dev/null
 
 echo "registration on; usernames must be phone numbers (E.164)"
