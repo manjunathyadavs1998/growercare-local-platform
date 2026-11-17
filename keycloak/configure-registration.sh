@@ -28,6 +28,8 @@ done
 kc get users/profile -r growercare < /dev/null | "$PY" -c '
 import json, sys
 profile = json.load(sys.stdin)
+if not any(a["name"] == "username" for a in profile["attributes"]):
+    sys.exit("the realm user profile has no username attribute: refusing to enable registration")
 for attribute in profile["attributes"]:
     if attribute["name"] == "username":
         attribute.setdefault("validations", {})["pattern"] = {
