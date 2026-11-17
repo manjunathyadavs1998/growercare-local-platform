@@ -1,4 +1,4 @@
-# End-to-end (SPEC-PLAT-06 R80): both services as their released images, on the platform network.
+# End-to-end (SPEC-PLAT-06 R80): the services as their released images, on the platform network.
 #   docker compose -f compose.services.yml up -d --wait     (after: docker compose up -d --wait)
 # Each service reads ONLY its env file (services/<name>.env, git-ignored; copy from services/<name>.env.example).
 # IMAGE_TAG picks the image version (default: latest = the newest main build).
@@ -29,6 +29,15 @@ services:
       - "8084:8084"                                # 8083 is Kafka Connect
     depends_on:
       - identity-access-service
+      - notification-service
+    restart: unless-stopped
+
+  notification-service:
+    image: ghcr.io/manjunathyadavs1998/notification-service:${NOTIFICATION_IMAGE_TAG:-latest}
+    container_name: gc-notification
+    env_file: services/notification-service.env
+    ports:
+      - "8085:8085"                                # dev mailbox: http://localhost:8085/dev/mailbox/ui?recipient=...
     restart: unless-stopped
 
 networks:

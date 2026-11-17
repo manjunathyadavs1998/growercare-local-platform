@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPEC-PLAT-01 R10: end-to-end smoke test against the real local stack
-# (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082 + grower-service :8084).
+# (Docker: Postgres, Redis, Keycloak + identity-access-service :8081 + case-service :8082 + grower-service :8084
+#  + notification-service :8085 with the dev mailbox).
 # Real Keycloak tokens (client gc-dev-cli). Prints a PASS/FAIL table; exit code = number of failed checks.
 set -uo pipefail
 
@@ -8,13 +9,15 @@ KC=${KC:-http://localhost:8180/realms/growercare}
 IAM=${IAM:-http://localhost:8081}
 CASE=${CASE:-http://localhost:8082}
 GROWER=${GROWER:-http://localhost:8084}
+NOTIFY=${NOTIFY:-http://localhost:8085}
 PY=${PY:-python}
+export PYTHONIOENCODING=utf-8                  # message bodies are Marathi/Hindi: read and print UTF-8, not the Windows code page
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 ROWS=()
 
-json() { "$PY" -c "import sys,json; d=json.load(open(sys.argv[1])); v=eval('d'+sys.argv[2]); print('' if v is None else v)" "$1" "$2" 2>/dev/null; }
+json() { "$PY" -c "import sys,json; d=json.load(open(sys.argv[1], encoding='utf-8')); v=eval('d'+sys.argv[2]); print('' if v is None else v)" "$1" "$2" 2>/dev/null; }
 
 token() { # user password
   curl -fsS -X POST "$KC/protocol/openid-connect/token" -d grant_type=password -d client_id=gc-dev-cli \
@@ -40,7 +43,7 @@ header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'
 echo "== GrowerCare smoke test =="
 
 # ---------------------------------------------------------------- S01 health
-for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "http://localhost:8180/realms/growercare"; do
+for target in "$IAM/actuator/health" "$CASE/actuator/health" "$GROWER/actuator/health" "$NOTIFY/actuator/health" "http://localhost:8180/realms/growercare"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
 done
@@ -50,6 +53,7 @@ T_CARE=$(token care.in 'Staff#Pass12')
 T_CARE_BR=$(token care.br 'Staff#Pass12')
 T_TM=$(token tm.in 'Staff#Pass12')
 T_AGRO=$(token agro.in 'Staff#Pass12')
+T_RET=$(token retailer.in 'Partner#Pass1')
 T_RET2=$(token retailer2.in 'Partner#Pass1')
 
 # ---------------------------------------------------------------- S00 warm-up (cold JVMs after a fresh start)
@@ -223,6 +227,41 @@ done
 GTYPES=$(echo "$LINES" | grep -o 'eventType:[a-z._]*' | head -2 | tr '\n' ' ')
 check GRW-R55 "grower.grower.events: grower.registered then grower.updated, key = growerId, no phone" \
   "$([[ "$GTYPES" == "eventType:grower.registered eventType:grower.updated " && "$LINES" != *"${PHONE:3}"* ]]; echo $?)"
+
+# ---------------------------------------------------------------- SPEC-GRW-03 + SPEC-NOT-01: PRD J2, assisted onboarding with OTP
+PHONE2="+919$("$PY" -c "import random; print(random.randint(100000000, 999999999))")"
+call POST "$GROWER/growers" "$T_RET" "{\"territoryId\":\"1002\",\"displayName\":\"Smoke Assisted\",\"phone\":\"$PHONE2\",\"preferredLanguage\":\"mr\"}"   -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+J2_ID=$(json "$TMP/body" "['growerId']")
+check GRW-E100 "retailer.in registers a grower → 201 PENDING_CONSENT" "$([[ $STATUS == 201 && $(json "$TMP/body" "['status']") == PENDING_CONSENT ]]; echo $?)"
+
+call POST "$GROWER/growers/$J2_ID/verifications" "$T_RET" '{"purpose":"ACTIVATION"}'
+VID=$(json "$TMP/body" "['verificationId']")
+check GRW-E101 "retailer.in starts the verification → 202, last 4 of the phone, no code in the response"   "$([[ $STATUS == 202 && $(json "$TMP/body" "['phoneLast4']") == "${PHONE2: -4}" && $(json "$TMP/body" "['code']") == '' ]]; echo $?)"
+
+# the dev mailbox (local only) is where the grower "receives" the SMS
+call GET "$NOTIFY/dev/mailbox?recipient=%2B${PHONE2:1}" ""
+OTP=$(json "$TMP/body" "['items'][0]['body']" | grep -oE '[0-9]{6}' | head -1)
+check NOT-E8 "the code arrives in the dev mailbox (Marathi text, 6 digits)" "$([[ $STATUS == 200 && ${#OTP} == 6 && $(json "$TMP/body" "['items'][0]['language']") == mr ]]; echo $?)"
+
+call POST "$GROWER/growers/$J2_ID/verifications/$VID/confirm" "$T_RET2"   "{\"code\":\"$OTP\",\"noticeVersion\":\"in-2026-11\",\"language\":\"mr\",\"consents\":[{\"purpose\":\"SERVICE\",\"granted\":true}]}"
+check GRW-E102 "retailer2.in (other partner) cannot confirm it → 404" "$([[ $STATUS == 404 ]]; echo $?)"
+
+call POST "$GROWER/growers/$J2_ID/verifications/$VID/confirm" "$T_RET"   "{\"code\":\"$OTP\",\"noticeVersion\":\"in-2026-11\",\"language\":\"mr\",\"consents\":[{\"purpose\":\"SERVICE\",\"granted\":true},{\"purpose\":\"MARKETING\",\"granted\":false}]}"
+check GRW-E107 "retailer.in confirms the code the grower read out → 200 ACTIVE" "$([[ $STATUS == 200 && $(json "$TMP/body" "['status']") == ACTIVE ]]; echo $?)"
+
+call GET "$GROWER/growers/$J2_ID/consents" "$T_CARE"
+CONSENTS=$(json "$TMP/body" "['items']")     # ordered by purpose: MARKETING, SERVICE
+check GRW-E120 "care.in reads the consents: SERVICE granted, ASSISTED by retailer.in (201)"   "$([[ $STATUS == 200 && $CONSENTS == *"'purpose': 'SERVICE', 'granted': True"*"'channel': 'ASSISTED', 'recordedByUserId': '201'"* ]]; echo $?)"
+
+# PRD J2: a case is accepted only after confirmation; case-service learns it from grower.updated (outbox → Debezium)
+J2_CASE=""
+for _ in $(seq 1 20); do
+  call POST "$CASE/cases" "$T_CARE" "{\"growerId\":\"$J2_ID\",\"caseType\":\"AGRONOMY_ADVICE\",\"title\":\"Smoke: activated grower\",\"description\":\"Accepted after consent\",\"buCode\":\"CP\"}"     -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+  [[ $STATUS == 201 ]] && { J2_CASE=$(json "$TMP/body" "['caseId']"); break; }
+  [[ $STATUS == 422 ]] || break
+  sleep 1
+done
+check GRW-E133 "after confirmation case-service accepts a case for the grower within 20 s (PRD J2)" "$([[ -n "$J2_CASE" ]]; echo $?)"
 
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""
