@@ -4,8 +4,9 @@
 #   ./keycloak/configure-registration.sh
 # - registration on (the realm's existing password policy applies), email and names optional;
 # - the username must be a phone number in E.164 (+<country code><number>).
-# The realm file switches registration on for new realms too; the user-profile validator is only set here, because
-# Keycloak stores the user profile as one JSON document that is safer to patch than to replace.
+# Registration stays OFF in the realm file: it is switched on only here, together with the phone-number validator,
+# so a stack that skips this script never offers an open sign-up that accepts any username. The user profile is one
+# JSON document in Keycloak, patched here rather than replaced.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
