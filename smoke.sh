@@ -200,8 +200,11 @@ call PATCH "$GROWER/growers/$GROWER_ID" "$T_CARE" '{"preferredLanguage":"hi"}' -
 check GRW-E43 "care.in updates the language with If-Match → 200, ETag \"1\"" \
   "$([[ $STATUS == 200 && $(header ETag) == '"1"' ]]; echo $?)"
 
+# case-service's own client secret, from the env file the service itself runs with (never a copy in this script)
+CASE_ENV="$(dirname "$0")/services/case-service.env"; [[ -f "$CASE_ENV" ]] || CASE_ENV="$CASE_ENV.example"
+CASE_SECRET=$(grep '^IAM_CLIENT_SECRET=' "$CASE_ENV" | cut -d= -f2 | tr -d '\r')
 T_CASE_SVC=$(curl -fsS -X POST "$KC/protocol/openid-connect/token" -d grant_type=client_credentials \
-  -d client_id=case-service -d client_secret="${CASE_CLIENT_SECRET:-dev-case-service-secret}" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+  -d client_id=case-service -d client_secret="$CASE_SECRET" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
 call GET "$GROWER/internal/growers/$GROWER_ID" "$T_CASE_SVC"
 check GRW-E72 "case-service reads the replica view (client credentials): phone only as HMAC + last 4" \
   "$([[ $STATUS == 200 && $(json "$TMP/body" "['phoneLast4']") == "${PHONE: -4}" && -n $(json "$TMP/body" "['phoneHmac']") ]]; echo $?)"
