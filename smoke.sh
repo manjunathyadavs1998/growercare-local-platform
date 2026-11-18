@@ -421,8 +421,10 @@ call GET "$GW/api/cases/cases/$GW_CASE" "$T_AGRO"
 NEXT=$(json "$TMP/body" "['allowedTransitions'][0]['toStatus']"); VER=$(header ETag)
 call POST "$GW/api/cases/cases/$GW_CASE/transitions" "$T_AGRO" "{\"toStatus\":\"$NEXT\",\"note\":\"J6 field visit\"}" -H "If-Match: $VER"
 check J6-a "J6 agro.in applies the first offered transition ($NEXT) → 200" "$([[ -n "$NEXT" && $STATUS == 200 ]]; echo $?)"
-call POST "$GW/api/cases/cases/$GW_CASE/transitions" "$T_AGRO" "{\"toStatus\":\"$NEXT\"}" -H "If-Match: $VER"
-check J6-b "J6 a stale update through the gateway → 412" "$([[ $STATUS == 412 ]]; echo $?)"
+call GET "$GW/api/cases/cases/$GW_CASE" "$T_AGRO"
+AFTER=$(json "$TMP/body" "['allowedTransitions'][0]['toStatus']")
+call POST "$GW/api/cases/cases/$GW_CASE/transitions" "$T_AGRO" "{\"toStatus\":\"$AFTER\"}" -H "If-Match: $VER"
+check J6-b "J6 an offered move with the old version (stale) through the gateway → 412" "$([[ $STATUS == 412 ]]; echo $?)"
 
 # J9: the territory overview
 call GET "$GW/api/cases/cases/overview" "$T_TM"
