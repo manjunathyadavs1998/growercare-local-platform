@@ -15,8 +15,8 @@
   "passwordPolicy": "length(10) and digits(1) and upperCase(1) and specialChars(1) and notUsername",
   "clients": [
     {
-      "clientId": "gc-web",
-      "name": "GrowerCare web apps",
+      "clientId": "grower-web",
+      "name": "GrowerCare grower app",
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
@@ -31,6 +31,37 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "aud-gc-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "gc-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "staff-console",
+      "name": "GrowerCare staff console",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost:5174/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5174"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5174/*"
       },
       "protocolMappers": [
         {

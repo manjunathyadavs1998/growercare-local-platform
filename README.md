@@ -18,6 +18,7 @@ cp .env.example .env                       # dev-only credentials; .env is git-i
 docker compose up -d --wait
 ./debezium/register.sh                     # after the services have migrated their databases once
 ./keycloak/configure-registration.sh       # grower self-registration: phone-number usernames (SPEC-IAM-03), idempotent
+./keycloak/configure-web-clients.sh   # web-app clients grower-web :5173, staff-console :5174 (SPEC-FE-01)
 ```
 
 **Upgrading an existing stack** (init scripts and the realm import only run on an empty volume / a new realm):

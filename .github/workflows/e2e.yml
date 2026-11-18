@@ -38,6 +38,9 @@ jobs:
       - name: Keycloak self-registration (SPEC-IAM-03 D1)
         run: ./keycloak/configure-registration.sh
 
+      - name: Keycloak web-app clients (SPEC-FE-01 D3)
+        run: ./keycloak/configure-web-clients.sh
+
       - name: Services (released images)
         run: |
           docker compose -f compose.services.yml pull --quiet
