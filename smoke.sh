@@ -11,6 +11,7 @@ CASE=${CASE:-http://localhost:8082}
 GROWER=${GROWER:-http://localhost:8084}
 NOTIFY=${NOTIFY:-http://localhost:8085}
 CATALOG=${CATALOG:-http://localhost:8086}
+GW=${GW:-http://localhost:8080}
 PY=${PY:-python}
 export PYTHONIOENCODING=utf-8                  # message bodies are Marathi/Hindi: read and print UTF-8, not the Windows code page
 TMP=$(mktemp -d)
@@ -46,13 +47,15 @@ header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'
 #   events  outbox → Debezium → Kafka, principal-cache eviction            (profile events)
 #   grower  grower registry, PRD J2 with OTP via notification-service      (profile grower)
 #   catalog PRD J3 farms + J4 catalog complaint                            (profiles grower + catalog)
-SECTIONS=" ${*:-core events grower catalog} "
+#   gateway PRD J5/J6/J8/J9 through the edge gateway :8080                  (profiles grower + gateway)
+SECTIONS=" ${*:-core events grower catalog gateway} "
 want() { [[ "$SECTIONS" == *" $1 "* ]]; }
 for s in $SECTIONS; do
-  [[ " core events grower catalog " == *" $s "* ]] || { echo "unknown section: $s (core events grower catalog)" >&2; exit 2; }
+  [[ " core events grower catalog gateway " == *" $s "* ]] || { echo "unknown section: $s (core events grower catalog gateway)" >&2; exit 2; }
 done
 want core || { echo "section core is required (tokens, the case later checks use)" >&2; exit 2; }
 if want catalog && ! want grower; then echo "section catalog needs grower (farms live in grower-service)" >&2; exit 2; fi
+if want gateway && ! want grower; then echo "section gateway needs grower (J5 finds the grower by phone)" >&2; exit 2; fi
 
 echo "== GrowerCare smoke test:${SECTIONS}=="
 
@@ -60,6 +63,7 @@ echo "== GrowerCare smoke test:${SECTIONS}=="
 TARGETS=("$IAM/actuator/health" "$CASE/actuator/health" "http://localhost:8180/realms/growercare")
 want grower && TARGETS+=("$GROWER/actuator/health" "$NOTIFY/actuator/health")
 want catalog && TARGETS+=("$CATALOG/actuator/health")
+want gateway && TARGETS+=("$GW/actuator/health")
 for target in "${TARGETS[@]}"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
@@ -382,6 +386,75 @@ check CASE-E172 "a complaint about the newly imported product and batch → 201,
   "$([[ $STATUS == 201 && $(json "$TMP/body" "['buCode']") == CP ]]; echo $?)"
 
 fi   # catalog
+
+# ---------------------------------------------------------------- SPEC-EDGE-01 E13: PRD J5/J6/J8/J9 through the gateway
+if want gateway; then
+T_ADMIN=${T_ADMIN:-$(token admin.in 'Staff#Pass12')}
+call GET "$GW/api/iam/me" ""
+check EDGE-E4 "gateway: no token → 401 UNAUTHENTICATED, nothing forwarded" "$([[ $STATUS == 401 && $(json "$TMP/body" "['code']") == UNAUTHENTICATED ]]; echo $?)"
+call GET "$GW/api/grower/internal/growers/$G1" "$T_CARE"
+check EDGE-E3 "gateway: an internal API is never routed → 404" "$([[ $STATUS == 404 ]]; echo $?)"
+RID=$("$PY" -c "import uuid; print(uuid.uuid4())")
+call GET "$GW/api/iam/me" "$T_CARE" "" -H "X-Request-Id: $RID" -H "X-Country: BR"
+check EDGE-E6 "gateway: routed with the prefix stripped, X-Request-Id kept, X-Country ignored" \
+  "$([[ $STATUS == 200 && $(header X-Request-Id) == "$RID" && $(json "$TMP/body" "['homeCountry']") == IN ]]; echo $?)"
+
+# J5: the grower calls; care finds them by phone and works their new case
+GKEY=$("$PY" -c "import uuid; print(uuid.uuid4())")
+call POST "$GW/api/cases/cases" "$T_GROWER" "${BODY/Smoke: leaves yellowing/Smoke J5: via the gateway}" -H "Idempotency-Key: $GKEY"
+GW_CASE=$(json "$TMP/body" "['caseId']")
+check EDGE-E1 "J5 grower.in1 raises a case through the gateway → 201, ETag passed back" "$([[ $STATUS == 201 && -n "$GW_CASE" && $(header ETag) == '"0"' ]]; echo $?)"
+call POST "$GW/api/grower/growers/search" "$T_CARE" '{"phone":"+919876543210","countryCode":"IN"}'
+FOUND=$(json "$TMP/body" "['items'][0]['growerId']")
+call GET "$GW/api/cases/cases?growerId=$FOUND&limit=100" "$T_CARE"
+check CASE-E215a "J5 care.in finds G1 by phone, then lists G1's cases (growerId filter) incl. the new one" \
+  "$([[ "$FOUND" == "$G1" && $STATUS == 200 && $(json "$TMP/body" "['items']" | grep -c "$GW_CASE") -ge 1 ]]; echo $?)"
+call GET "$GW/api/cases/cases?growerId=$G1" "$T_CARE_BR"
+check CASE-E201 "J5 care.br filtering by an Indian grower → empty page" "$([[ $STATUS == 200 && $(json "$TMP/body" "['items']") == '[]' ]]; echo $?)"
+call POST "$GW/api/cases/cases/$GW_CASE/transitions" "$T_CARE" '{"toStatus":"TRIAGED","note":"J5 triage via gateway"}' -H 'If-Match: "0"'
+check J5-a "J5 care.in triages (If-Match through the gateway) → 200" "$([[ $STATUS == 200 && $(header ETag) == '"1"' ]]; echo $?)"
+call PUT "$GW/api/cases/cases/$GW_CASE/assignee" "$T_CARE" '{"assigneeUserId":"102"}' -H 'If-Match: "1"'
+check J5-b "J5 care.in assigns agro.in → 200" "$([[ $STATUS == 200 ]]; echo $?)"
+
+# J6: the agronomist takes an offered transition; a stale update is refused
+call GET "$GW/api/cases/cases/$GW_CASE" "$T_AGRO"
+NEXT=$(json "$TMP/body" "['allowedTransitions'][0]['toStatus']"); VER=$(header ETag)
+call POST "$GW/api/cases/cases/$GW_CASE/transitions" "$T_AGRO" "{\"toStatus\":\"$NEXT\",\"note\":\"J6 field visit\"}" -H "If-Match: $VER"
+check J6-a "J6 agro.in applies the first offered transition ($NEXT) → 200" "$([[ -n "$NEXT" && $STATUS == 200 ]]; echo $?)"
+call POST "$GW/api/cases/cases/$GW_CASE/transitions" "$T_AGRO" "{\"toStatus\":\"$NEXT\"}" -H "If-Match: $VER"
+check J6-b "J6 a stale update through the gateway → 412" "$([[ $STATUS == 412 ]]; echo $?)"
+
+# J9: the territory overview
+call GET "$GW/api/cases/cases/overview" "$T_TM"
+check CASE-E215b "J9 tm.in overview over Maharashtra → 200 with counts" \
+  "$([[ $STATUS == 200 && $(json "$TMP/body" "['scope']['territoryIds']") == *1002* && -n $(json "$TMP/body" "['openByStatus']") ]]; echo $?)"
+call GET "$GW/api/cases/cases/overview?territoryId=1005" "$T_TM"
+check CASE-E211 "J9 a territory outside tm.in's scope → 404" "$([[ $STATUS == 404 ]]; echo $?)"
+call GET "$GW/api/cases/cases/overview" "$T_CARE"
+check CASE-E212 "J9 care.in has no dashboard permission → 403" "$([[ $STATUS == 403 ]]; echo $?)"
+
+# J8: the admin finds agro.in, grants a temporary role in Karnataka, revokes it
+call GET "$GW/api/iam/users?q=vik" "$T_ADMIN"
+check IAM-E86a "J8 admin.in finds Vikram Agro (102) in the directory" "$([[ $STATUS == 200 && $(json "$TMP/body" "['items'][0]['userId']") == 102 ]]; echo $?)"
+call GET "$GW/api/iam/users?type=GROWER" "$T_ADMIN"
+check IAM-E82 "J8 grower names are masked for admin.in" "$([[ $STATUS == 200 && $(json "$TMP/body" "['items'][0]['displayName']") == *'*'* ]]; echo $?)"
+VALID_TO=$("$PY" -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+call POST "$GW/api/iam/grants" "$T_ADMIN" "{\"userId\":\"102\",\"roleCode\":\"TERRITORY_MANAGER\",\"territoryIds\":[\"1005\"],\"validTo\":\"$VALID_TO\",\"reason\":\"Smoke J8: cover Karnataka\"}"
+J8_GRANT=$(json "$TMP/body" "['grantId']")
+check IAM-E86b "J8 temporary TERRITORY_MANAGER grant for Karnataka → 201" "$([[ $STATUS == 201 && -n "$J8_GRANT" ]]; echo $?)"
+if want events; then
+  OK=1; for _ in $(seq 1 10); do call GET "$GW/api/cases/cases/overview?territoryId=1005" "$T_AGRO"; [[ $STATUS == 200 ]] && { OK=0; break; }; sleep 1; done
+  check IAM-E86c "J8 the grant takes effect in case-service within 10 s (agro.in sees the Karnataka overview)" "$OK"
+fi
+call DELETE "$GW/api/iam/grants/$J8_GRANT?reason=Smoke%20J8%20done" "$T_ADMIN"
+check IAM-E86d "J8 revoke → 200" "$([[ $STATUS == 200 ]]; echo $?)"
+if want events; then
+  OK=1; for _ in $(seq 1 10); do call GET "$GW/api/cases/cases/overview?territoryId=1005" "$T_AGRO"; [[ $STATUS == 403 ]] && { OK=0; break; }; sleep 1; done
+  check IAM-E86e "J8 the revocation takes effect within 10 s (403 again)" "$OK"
+fi
+call GET "$GW/api/cases/cases/$GW_CASE" "$T_CARE_BR"
+check J8-a "J8 care.br opens the Indian case by URL through the gateway → 404" "$([[ $STATUS == 404 ]]; echo $?)"
+fi   # gateway
 
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""

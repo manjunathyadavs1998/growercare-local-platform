@@ -53,6 +53,18 @@ services:
       - identity-access-service
     restart: unless-stopped
 
+  edge-gateway:
+    image: ghcr.io/manjunathyadavs1998/edge-gateway:${EDGE_IMAGE_TAG:-latest}
+    container_name: gc-edge
+    profiles: ["gateway"]                        # SPEC-EDGE-01: the web apps' single entry point (/api/<service>/**)
+    env_file: services/edge-gateway.env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - identity-access-service
+      - case-service
+    restart: unless-stopped
+
 networks:
   default:
     name: growercare
