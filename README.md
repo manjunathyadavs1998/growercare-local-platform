@@ -25,7 +25,7 @@ docker compose up -d --wait
 - notification-service (`gc_notification` database): add `GC_NOTIFICATION_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-notification-service.sh` (idempotent). Add `NOTIFICATION_BASE_URL` to `services/grower-service.env`.
 - catalog-registry-service (`gc_catalog` database + Keycloak clients `catalog-registry-service` and `erp-sync`): add `GC_CATALOG_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-catalog-service.sh` (idempotent). Add `CATALOG_BASE_URL` to `services/case-service.env` and `catalog-registry-service` to IAM's `GC_INTERNAL_CLIENTS`; re-run `./debezium/register.sh` for the `catalog-outbox` connector.
 
-Service ports on the host: identity-access-service 8081, case-service 8082, grower-service **8084** (8083 is Kafka Connect), notification-service 8085, catalog-registry-service 8086.
+Service ports on the host: identity-access-service 8081, case-service 8082, grower-service **8084** (8083 is Kafka Connect), notification-service 8085, catalog-registry-service 8086, **edge-gateway 8080** (the web apps' single entry point: `/api/iam`, `/api/cases`, `/api/grower`, `/api/catalog`).
 
 **Dev mailbox (local only):** notification-service stores SMS, WhatsApp and email messages instead of sending them. Read one-time codes at `http://localhost:8085/dev/mailbox/ui?recipient=%2B919876543210` (or `/dev/mailbox?recipient=…` as JSON).
 
@@ -47,15 +47,16 @@ Inside the network, services reach the infrastructure by container name:
 Tokens are issued for `http://localhost:8180/realms/growercare`, so services validate that issuer (`OIDC_ISSUER_URI`) and fetch keys from `OIDC_JWKS_URI`.
 
 ## Running on a laptop (16 GB)
-The whole stack (infrastructure plus six services) needs about 5 GB inside Docker's VM and does not fit next to Windows,
+The whole stack (infrastructure plus seven services) needs about 5 GB inside Docker's VM and does not fit next to Windows,
 an IDE and a browser on a 16 GB laptop. Run what you are working on and let CI run everything:
 
-- **Profiles** (`COMPOSE_PROFILES` in `.env`; default `events,grower,catalog` = everything). Core is always on: Postgres,
+- **Profiles** (`COMPOSE_PROFILES` in `.env`; default `events,grower,catalog,gateway` = everything). Core is always on: Postgres,
   Redis, Keycloak, Kafka, SeaweedFS, identity-access-service, case-service.
   - `events`: Kafka Connect / Debezium (the heaviest container, about 400 MB).
   - `grower`: grower-service and notification-service.
   - `catalog`: catalog-registry-service.
-- **Smoke sections** match them: `./smoke.sh` runs all; `./smoke.sh core grower` runs a subset (`catalog` needs `grower`).
+  - `gateway`: edge-gateway (about 250 MB); smoke section `gateway` runs PRD J5/J6/J8/J9 through it (needs `grower`).
+- **Smoke sections** match them: `./smoke.sh` runs all; `./smoke.sh core grower` runs a subset (`catalog` and `gateway` need `grower`).
 
   ```bash
   COMPOSE_PROFILES=grower docker compose up -d --wait

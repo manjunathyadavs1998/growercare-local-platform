@@ -47,10 +47,10 @@ jobs:
         run: |
           for i in $(seq 1 90); do
             ok=0
-            for port in 8081 8082 8084 8085 8086; do
+            for port in 8081 8082 8084 8085 8086 8080; do
               curl -fs -o /dev/null "http://localhost:$port/actuator/health" && ok=$((ok + 1))
             done
-            [ "$ok" = 5 ] && { echo "all healthy after $((i * 5)) s"; exit 0; }
+            [ "$ok" = 6 ] && { echo "all healthy after $((i * 5)) s"; exit 0; }
             sleep 5
           done
           echo "services not healthy after 450 s"; exit 1
