@@ -28,6 +28,8 @@ docker compose up -d --wait
 
 Service ports on the host: identity-access-service 8081, case-service 8082, grower-service **8084** (8083 is Kafka Connect), notification-service 8085, catalog-registry-service 8086, **edge-gateway 8080** (the web apps' single entry point: `/api/iam`, `/api/cases`, `/api/grower`, `/api/catalog`).
 
+**Web apps (profile `web`, SPEC-FE-04):** grower-web at http://localhost:5173 and staff-console at http://localhost:5174, the released nginx images in front of the edge gateway (so the `gateway` profile is needed too). Copy `services/grower-web.env.example` and `services/staff-console.env.example`, run `./keycloak/configure-web-clients.sh` once, and `./seaweedfs/configure-cors.sh` after `docker compose up -d --wait` (the browser uploads photos straight to the object store; only these two origins are allowed). `./smoke.sh core events grower gateway notify web` checks them, and J7 (case notifications in the dev mailbox).
+
 **Dev mailbox (local only):** notification-service stores SMS, WhatsApp and email messages instead of sending them. Read one-time codes at `http://localhost:8085/dev/mailbox/ui?recipient=%2B919876543210` (or `/dev/mailbox?recipient=…` as JSON).
 
 ## Run the services
