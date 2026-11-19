@@ -141,6 +141,28 @@
       ]
     },
     {
+      "clientId": "notification-service",
+      "name": "notification-service (service-to-service: reads contacts, SPEC-NOT-02)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "dev-notification-service-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "aud-gc-internal",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "gc-internal",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "catalog-registry-service",
       "name": "catalog-registry-service (service-to-service)",
       "enabled": true,
