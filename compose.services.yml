@@ -65,6 +65,29 @@ services:
       - case-service
     restart: unless-stopped
 
+  # SPEC-FE-04 D1/D2: the web apps as their released nginx images (profile web; needs the gateway profile).
+  grower-web:
+    image: ghcr.io/manjunathyadavs1998/grower-web:${WEB_IMAGE_TAG:-latest}
+    container_name: gc-grower-web
+    profiles: ["web"]
+    env_file: services/grower-web.env
+    ports:
+      - "5173:8080"                                # the origin Keycloak's grower-web client redirects to
+    depends_on:
+      - edge-gateway
+    restart: unless-stopped
+
+  staff-console:
+    image: ghcr.io/manjunathyadavs1998/staff-console:${WEB_IMAGE_TAG:-latest}
+    container_name: gc-staff-console
+    profiles: ["web"]
+    env_file: services/staff-console.env
+    ports:
+      - "5174:8080"
+    depends_on:
+      - edge-gateway
+    restart: unless-stopped
+
 networks:
   default:
     name: growercare

@@ -35,6 +35,9 @@ jobs:
       - name: Infrastructure
         run: docker compose up -d --wait
 
+      - name: Object-store CORS for the web apps (SPEC-FE-04 D2)
+        run: ./seaweedfs/configure-cors.sh
+
       - name: Keycloak self-registration (SPEC-IAM-03 D1)
         run: ./keycloak/configure-registration.sh
 
@@ -53,7 +56,10 @@ jobs:
             for port in 8081 8082 8084 8085 8086 8080; do
               curl -fs -o /dev/null "http://localhost:$port/actuator/health" && ok=$((ok + 1))
             done
-            [ "$ok" = 6 ] && { echo "all healthy after $((i * 5)) s"; exit 0; }
+            for port in 5173 5174; do                  # the web apps (nginx): their runtime config is served
+              curl -fs -o /dev/null "http://localhost:$port/config.json" && ok=$((ok + 1))
+            done
+            [ "$ok" = 8 ] && { echo "all healthy after $((i * 5)) s"; exit 0; }
             sleep 5
           done
           echo "services not healthy after 450 s"; exit 1

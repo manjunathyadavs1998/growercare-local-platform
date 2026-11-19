@@ -48,14 +48,18 @@ header() { grep -i "^$1:" "$TMP/headers" | head -1 | cut -d' ' -f2- | tr -d '\r'
 #   grower  grower registry, PRD J2 with OTP via notification-service      (profile grower)
 #   catalog PRD J3 farms + J4 catalog complaint                            (profiles grower + catalog)
 #   gateway PRD J5/J6/J8/J9 through the edge gateway :8080                  (profiles grower + gateway)
-SECTIONS=" ${*:-core events grower catalog gateway} "
+#   notify  PRD J7: case events → messages in the dev mailbox (SPEC-NOT-02) (profiles events + grower)
+#   web     the apps' nginx images :5173/:5174 + object-store CORS (FE-04) (profiles gateway + web)
+SECTIONS=" ${*:-core events grower catalog gateway notify web} "
 want() { [[ "$SECTIONS" == *" $1 "* ]]; }
 for s in $SECTIONS; do
-  [[ " core events grower catalog gateway " == *" $s "* ]] || { echo "unknown section: $s (core events grower catalog gateway)" >&2; exit 2; }
+  [[ " core events grower catalog gateway notify web " == *" $s "* ]] || { echo "unknown section: $s (core events grower catalog gateway notify web)" >&2; exit 2; }
 done
 want core || { echo "section core is required (tokens, the case later checks use)" >&2; exit 2; }
 if want catalog && ! want grower; then echo "section catalog needs grower (farms live in grower-service)" >&2; exit 2; fi
 if want gateway && ! want grower; then echo "section gateway needs grower (J5 finds the grower by phone)" >&2; exit 2; fi
+if want notify && ! { want grower && want events; }; then echo "section notify needs grower and events (case events reach notification-service through Debezium)" >&2; exit 2; fi
+if want web && ! want gateway; then echo "section web needs gateway (the apps proxy /api to it)" >&2; exit 2; fi
 
 echo "== GrowerCare smoke test:${SECTIONS}=="
 
@@ -64,6 +68,7 @@ TARGETS=("$IAM/actuator/health" "$CASE/actuator/health" "http://localhost:8180/r
 want grower && TARGETS+=("$GROWER/actuator/health" "$NOTIFY/actuator/health")
 want catalog && TARGETS+=("$CATALOG/actuator/health")
 want gateway && TARGETS+=("$GW/actuator/health")
+want web && TARGETS+=("http://localhost:5173/config.json" "http://localhost:5174/config.json")
 for target in "${TARGETS[@]}"; do
   STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "$target")
   check PLAT-S01 "reachable: $target" "$([[ $STATUS == 200 ]]; echo $?)"
@@ -457,6 +462,60 @@ fi
 call GET "$GW/api/cases/cases/$GW_CASE" "$T_CARE_BR"
 check J8-a "J8 care.br opens the Indian case by URL through the gateway → 404" "$([[ $STATUS == 404 ]]; echo $?)"
 fi   # gateway
+
+# ---------------------------------------------------------------- SPEC-NOT-02 E48: PRD J7, everyone is kept informed
+if want notify; then
+G1_PHONE=${G1_PHONE:-+919876543210}            # grower.in1 (G1), language mr
+AGRO_EMAIL=${AGRO_EMAIL:-agro.in@growercare.test}
+call POST "$CASE/cases" "$T_GROWER" "${BODY/Smoke: leaves yellowing/Smoke J7: notifications}" -H "Idempotency-Key: $("$PY" -c "import uuid; print(uuid.uuid4())")"
+J7_CASE=$(json "$TMP/body" "['caseId']")
+check NOT-E48a "J7 grower.in1 raises a case → 201" "$([[ $STATUS == 201 && -n "$J7_CASE" ]]; echo $?)"
+call POST "$CASE/cases/$J7_CASE/comments" "$T_CARE" "{\"clientMsgId\":\"$("$PY" -c "import uuid; print(uuid.uuid4())")\",\"visibility\":\"INTERNAL\",\"body\":\"Smoke J7 internal note\"}"
+check NOT-E48b "J7 care.in adds an internal note → 201" "$([[ $STATUS == 201 ]]; echo $?)"
+call POST "$CASE/cases/$J7_CASE/comments" "$T_CARE" "{\"clientMsgId\":\"$("$PY" -c "import uuid; print(uuid.uuid4())")\",\"visibility\":\"PUBLIC\",\"body\":\"Smoke J7 public reply\"}"
+check NOT-E48c "J7 care.in replies publicly → 201" "$([[ $STATUS == 201 ]]; echo $?)"
+call GET "$CASE/cases/$J7_CASE" "$T_CARE"
+call PUT "$CASE/cases/$J7_CASE/assignee" "$T_CARE" '{"assigneeUserId":"102"}' -H "If-Match: $(header ETag)"
+check NOT-E48d "J7 care.in assigns agro.in → 200" "$([[ $STATUS == 200 ]]; echo $?)"
+# the templates a recipient got for this case (oldest first), e.g. "case.created/mr case.reply/mr"
+mail_for() { # recipient-url-encoded case-id
+  curl -s -o "$TMP/mail" "$NOTIFY/dev/mailbox?recipient=$1"
+  "$PY" -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8')); print(' '.join(m['template']+'/'+m['language'] for m in reversed(d['items']) if '/cases/'+sys.argv[2] in m['body']))" "$TMP/mail" "$2" 2>/dev/null
+}
+# the grower: the new case at once, the public reply when the (local: 20 s) window ends; never the internal note
+OK=1; for _ in $(seq 1 45); do GOT=$(mail_for "%2B${G1_PHONE:1}" "$J7_CASE"); [[ "$GOT" == "case.created/mr case.reply/mr" ]] && { OK=0; break; }; sleep 2; done
+STATUS=200; echo "grower mailbox: $GOT" > "$TMP/body"
+check NOT-E48e "J7 grower.in1 gets case.created and the reply in Marathi, nothing for the note (≤ 90 s)" "$OK"
+OK=1; for _ in $(seq 1 15); do GOT=$(mail_for "${AGRO_EMAIL/@/%40}" "$J7_CASE"); [[ "$GOT" == "staff.assigned/en" ]] && { OK=0; break; }; sleep 2; done
+echo "agro.in mailbox: $GOT" > "$TMP/body"
+check NOT-E48f "J7 agro.in gets the assignment email at once" "$OK"
+fi   # notify
+
+# ---------------------------------------------------------------- SPEC-FE-04 R400/R401: the apps' nginx images, object-store CORS
+if want web; then
+for app in grower-web:5173 staff-console:5174; do
+  name=${app%%:*}; port=${app##*:}
+  STATUS=$(curl -s -D "$TMP/headers" -o "$TMP/body" -w '%{http_code}' "http://localhost:$port/")
+  check FE-R400a "$name :$port serves the app with its CSP (connect-src: Keycloak + the object store)" \
+    "$([[ $STATUS == 200 && $(header Content-Security-Policy) == *"connect-src 'self' http://localhost:8180 http://localhost:8333"* ]]; echo $?)"
+  STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "http://localhost:$port/config.json")
+  check FE-R400b "$name /config.json names its own Keycloak client" "$([[ $STATUS == 200 && $(json "$TMP/body" "['oidcClientId']") == "$name" ]]; echo $?)"
+  STATUS=$(curl -s -o "$TMP/body" -w '%{http_code}' "http://localhost:$port/cases/123")
+  check FE-R400c "$name deep link /cases/123 → the app (client-side routing)" "$([[ $STATUS == 200 ]] && grep -q 'id="root"' "$TMP/body"; echo $?)"
+done
+call GET "http://localhost:5173/api/iam/me" "$T_GROWER"
+check FE-R400d "grower-web /api reaches the gateway (grower.in1 /me through nginx → 200)" "$([[ $STATUS == 200 && $(json "$TMP/body" "['userType']") == GROWER ]]; echo $?)"
+call GET "http://localhost:5174/api/cases/cases?limit=1" "$T_CARE"
+check FE-R400e "staff-console /api reaches the gateway (care.in queue through nginx → 200)" "$([[ $STATUS == 200 ]]; echo $?)"
+for origin in http://localhost:5173 http://localhost:5174; do
+  STATUS=$(curl -s -o "$TMP/body" -D "$TMP/headers" -w '%{http_code}' -X OPTIONS "http://localhost:8333/gc-media-staging/smoke-cors.jpg" \
+    -H "Origin: $origin" -H 'Access-Control-Request-Method: PUT' -H 'Access-Control-Request-Headers: content-type')
+  check FE-R401a "object store: a presigned PUT from $origin is allowed (CORS preflight)" "$([[ $STATUS == 200 && $(header Access-Control-Allow-Origin) == "$origin" ]]; echo $?)"
+done
+STATUS=$(curl -s -o "$TMP/body" -D "$TMP/headers" -w '%{http_code}' -X OPTIONS "http://localhost:8333/gc-media-staging/smoke-cors.jpg" \
+  -H 'Origin: http://evil.test' -H 'Access-Control-Request-Method: PUT')
+check FE-R401b "object store: a preflight from any other origin is refused (403)" "$([[ $STATUS == 403 && -z $(header Access-Control-Allow-Origin) ]]; echo $?)"
+fi   # web
 
 # ---------------------------------------------------------------- S11 authentication failures
 call GET "$CASE/cases" ""
