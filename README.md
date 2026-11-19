@@ -32,6 +32,8 @@ Service ports on the host: identity-access-service 8081, case-service 8082, grow
 
 **Dev mailbox (local only):** notification-service stores SMS, WhatsApp and email messages instead of sending them. Read one-time codes at `http://localhost:8085/dev/mailbox/ui?recipient=%2B919876543210` (or `/dev/mailbox?recipient=…` as JSON).
 
+**Everything, step by step** (stack, sign-in users, one Playwright journey at a time, reset, troubleshooting): [docs/run-everything.md](docs/run-everything.md).
+
 ## Run the services
 - **From their repositories (development).** Each service repository has its own `compose.yaml` and `.env.example` and attaches to the `growercare` network.
 - **As released images (end to end).** Copy `services/<name>.env.example` to `services/<name>.env`, then:
