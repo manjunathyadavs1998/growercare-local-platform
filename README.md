@@ -23,7 +23,7 @@ docker compose up -d --wait
 
 **Upgrading an existing stack** (init scripts and the realm import only run on an empty volume / a new realm):
 - grower-service (`gc_grower` database + Keycloak client `grower-service`): add `GC_GROWER_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-grower-service.sh` (idempotent).
-- notification-service (`gc_notification` database): add `GC_NOTIFICATION_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-notification-service.sh` (idempotent). Add `NOTIFICATION_BASE_URL` to `services/grower-service.env`.
+- notification-service (`gc_notification` database + Keycloak client `notification-service`): add `GC_NOTIFICATION_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-notification-service.sh` (idempotent). Add `NOTIFICATION_BASE_URL` to `services/grower-service.env`. For case notifications (SPEC-NOT-02), copy `services/notification-service.env.example` again (Kafka, contact services, service client, app links).
 - catalog-registry-service (`gc_catalog` database + Keycloak clients `catalog-registry-service` and `erp-sync`): add `GC_CATALOG_*` from `.env.example` to `.env`, then `docker compose up -d --wait && ./apply-catalog-service.sh` (idempotent). Add `CATALOG_BASE_URL` to `services/case-service.env` and `catalog-registry-service` to IAM's `GC_INTERNAL_CLIENTS`; re-run `./debezium/register.sh` for the `catalog-outbox` connector.
 
 Service ports on the host: identity-access-service 8081, case-service 8082, grower-service **8084** (8083 is Kafka Connect), notification-service 8085, catalog-registry-service 8086, **edge-gateway 8080** (the web apps' single entry point: `/api/iam`, `/api/cases`, `/api/grower`, `/api/catalog`).
